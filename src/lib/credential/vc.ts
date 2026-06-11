@@ -1,5 +1,10 @@
 import type { Issuer, Student } from "@prisma/client";
 
+import {
+  didForWalletAddress,
+  normalizeWalletAddress
+} from "../blockchain/address";
+
 export type StudentCredentialPayload = {
   id: string;
   type: ["VerifiableCredential", "StudentCredential"];
@@ -41,12 +46,12 @@ export function buildStudentCredential({
     id: credentialId,
     type: ["VerifiableCredential", "StudentCredential"],
     issuer: {
-      id: issuer.did,
+      id: didForWalletAddress(issuer.walletAddress),
       name: issuer.name,
-      walletAddress: issuer.walletAddress
+      walletAddress: normalizeWalletAddress(issuer.walletAddress)
     },
     credentialSubject: {
-      id: `did:ethr:${student.walletAddress}`,
+      id: didForWalletAddress(student.walletAddress),
       studentId: student.id,
       activeStudent: student.active,
       university: issuer.name
@@ -61,5 +66,39 @@ export function buildStudentCredential({
 }
 
 export function parseCredentialJson(value: string) {
-  return JSON.parse(value) as StudentCredentialPayload;
+  const parsed = JSON.parse(value) as unknown;
+
+  if (!isStudentCredentialPayload(parsed)) {
+    throw new Error("Invalid StudentCredential payload");
+  }
+
+  return parsed;
+}
+
+export function isStudentCredentialPayload(
+  value: unknown
+): value is StudentCredentialPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const payload = value as StudentCredentialPayload;
+
+  return (
+    typeof payload.id === "string" &&
+    Array.isArray(payload.type) &&
+    payload.type.includes("VerifiableCredential") &&
+    payload.type.includes("StudentCredential") &&
+    typeof payload.issuer?.id === "string" &&
+    typeof payload.issuer?.name === "string" &&
+    typeof payload.issuer?.walletAddress === "string" &&
+    typeof payload.credentialSubject?.id === "string" &&
+    typeof payload.credentialSubject?.studentId === "string" &&
+    typeof payload.credentialSubject?.activeStudent === "boolean" &&
+    typeof payload.credentialSubject?.university === "string" &&
+    payload.schema?.name === "StudentCredential" &&
+    payload.schema?.version === "1.0" &&
+    typeof payload.issuanceDate === "string" &&
+    typeof payload.expirationDate === "string"
+  );
 }

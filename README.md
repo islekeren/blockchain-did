@@ -97,9 +97,11 @@ The credential payload shown to the verifier intentionally omits student name, s
 
 ## Placeholder Hashing
 
-Credential hashes are generated in [src/lib/credential/hash.ts](src/lib/credential/hash.ts) with `ethers` `keccak256` over a stable JSON serialization.
+Credential hashes are generated in [src/lib/credential/hash.ts](src/lib/credential/hash.ts) with `ethers` `keccak256` over ABI-encoded canonical credential fields.
 
-This is a placeholder. When Solidity contracts are added, the frontend/server hash method must match the contract-side canonical hashing exactly.
+This is still a placeholder, but it is shaped for the next Solidity phase: the contract can reproduce the same hash with `keccak256(abi.encode(...))` over the same ordered fields.
+
+The verifier also compares the presented credential payload hash against the stored database hash before returning **Approved**. Later, that same hash can be checked against the on-chain credential registry.
 
 ## Future Blockchain TODOs
 
@@ -113,6 +115,15 @@ Placeholder functions live in [src/lib/blockchain/registryClient.ts](src/lib/blo
 - `isCredentialRevokedOnChain()`
 
 For now, these functions throw `Blockchain integration not implemented yet`, and the UI only shows disabled TODO controls.
+
+Blockchain configuration placeholders use server-side environment variables:
+
+```bash
+CHAIN_ID=""
+RPC_URL=""
+ISSUER_REGISTRY_ADDRESS=""
+CREDENTIAL_REGISTRY_ADDRESS=""
+```
 
 ## Demo Flow
 

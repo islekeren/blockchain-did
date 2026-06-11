@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { normalizeEthrDid, normalizeWalletAddress } from "@/lib/blockchain/address";
 import { prisma } from "@/lib/db/prisma";
 import { createIssuerSchema } from "@/lib/validation/schemas";
 
@@ -25,9 +26,12 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const data = createIssuerSchema.parse(await request.json());
+    const walletAddress = normalizeWalletAddress(data.walletAddress);
     const issuer = await prisma.issuer.create({
       data: {
         ...data,
+        did: normalizeEthrDid(data.did, walletAddress),
+        walletAddress,
         trusted: data.trusted ?? false
       }
     });

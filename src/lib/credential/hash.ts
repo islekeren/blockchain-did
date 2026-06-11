@@ -1,51 +1,83 @@
-import { keccak256, toUtf8Bytes } from "ethers";
+import { AbiCoder, keccak256 } from "ethers";
 
-type JsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+import { normalizeWalletAddress } from "../blockchain/address";
+import type { StudentCredentialPayload } from "./vc";
 
-function sortJsonValue(value: unknown): JsonValue {
-  if (value === null) {
-    return null;
+export type CredentialHashInput = {
+  credentialId: string;
+  issuerDid: string;
+  issuerWalletAddress: string;
+  subjectDid: string;
+  studentId: string;
+  activeStudent: boolean;
+  schemaName: string;
+  schemaVersion: string;
+  issuanceTimestamp: bigint;
+  expirationTimestamp: bigint;
+};
+
+const credentialHashTypes = [
+  "string",
+  "string",
+  "address",
+  "string",
+  "string",
+  "bool",
+  "string",
+  "string",
+  "uint256",
+  "uint256"
+] as const;
+
+function toUnixSeconds(value: string, fieldName: string) {
+  const timestamp = Date.parse(value);
+
+  if (Number.isNaN(timestamp)) {
+    throw new Error(`${fieldName} must be a valid ISO date`);
   }
 
-  if (Array.isArray(value)) {
-    return value.map(sortJsonValue);
-  }
-
-  if (typeof value === "object") {
-    return Object.keys(value as Record<string, unknown>)
-      .sort()
-      .reduce<Record<string, JsonValue>>((acc, key) => {
-        acc[key] = sortJsonValue((value as Record<string, unknown>)[key]);
-        return acc;
-      }, {});
-  }
-
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
-    return value;
-  }
-
-  return String(value);
+  return BigInt(Math.floor(timestamp / 1000));
 }
 
-export function stableStringifyCredential(payload: unknown) {
-  return JSON.stringify(sortJsonValue(payload));
+export function credentialHashInputFromPayload(
+  payload: StudentCredentialPayload
+): CredentialHashInput {
+  return {
+    credentialId: payload.id,
+    issuerDid: payload.issuer.id,
+    issuerWalletAddress: normalizeWalletAddress(payload.issuer.walletAddress),
+    subjectDid: payload.credentialSubject.id,
+    studentId: payload.credentialSubject.studentId,
+    activeStudent: payload.credentialSubject.activeStudent,
+    schemaName: payload.schema.name,
+    schemaVersion: payload.schema.version,
+    issuanceTimestamp: toUnixSeconds(payload.issuanceDate, "issuanceDate"),
+    expirationTimestamp: toUnixSeconds(payload.expirationDate, "expirationDate")
+  };
+}
+
+export function hashCredentialCanonicalInput(input: CredentialHashInput) {
+  const encoded = AbiCoder.defaultAbiCoder().encode(credentialHashTypes, [
+    input.credentialId,
+    input.issuerDid,
+    normalizeWalletAddress(input.issuerWalletAddress),
+    input.subjectDid,
+    input.studentId,
+    input.activeStudent,
+    input.schemaName,
+    input.schemaVersion,
+    input.issuanceTimestamp,
+    input.expirationTimestamp
+  ]);
+
+  return keccak256(encoded);
 }
 
 /**
  * Deterministic placeholder for the future Solidity-side credential hash.
- * Keep this isolated: when contracts are introduced, this serialization must
- * be matched exactly or replaced by the contract ABI's canonical hash method.
+ * This intentionally hashes ABI-encoded canonical fields, not raw JSON, so the
+ * next contract phase can reproduce it with keccak256(abi.encode(...)).
  */
-export function hashCredentialPayload(payload: unknown) {
-  return keccak256(toUtf8Bytes(stableStringifyCredential(payload)));
+export function hashCredentialPayload(payload: StudentCredentialPayload) {
+  return hashCredentialCanonicalInput(credentialHashInputFromPayload(payload));
 }

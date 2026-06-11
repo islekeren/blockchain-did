@@ -1,4 +1,5 @@
 import type { StudentCredentialPayload } from "@/lib/credential/vc";
+import type { CredentialStatus } from "@/lib/domain/status";
 
 export type IssuerRecord = {
   id: string;
@@ -29,8 +30,6 @@ export type StudentRecord = {
     credentials: number;
   };
 };
-
-export type CredentialStatus = "ISSUED" | "REVOKED" | "EXPIRED";
 
 export type CredentialRecord = {
   id: string;

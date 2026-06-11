@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { hashCredentialPayload } from "@/lib/credential/hash";
+import {
+  isStudentCredentialPayload,
+  type StudentCredentialPayload
+} from "@/lib/credential/vc";
 import { prisma } from "@/lib/db/prisma";
 import { verifyCredentialSchema } from "@/lib/validation/schemas";
 
@@ -12,23 +17,27 @@ type VerificationCheck = {
   detail: string;
 };
 
-function parseCredentialInput(value?: string) {
+function parseCredentialInput(value?: string): StudentCredentialPayload | null {
   if (!value) {
     return null;
   }
 
   try {
-    return JSON.parse(value) as {
-      id?: string;
-      issuer?: {
-        id?: string;
-        walletAddress?: string;
-      };
-      credentialSubject?: {
-        activeStudent?: boolean;
-      };
-      expirationDate?: string;
-    };
+    const parsed = JSON.parse(value) as unknown;
+
+    return isStudentCredentialPayload(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeHashCredential(payload: StudentCredentialPayload | null) {
+  if (!payload) {
+    return null;
+  }
+
+  try {
+    return hashCredentialPayload(payload);
   } catch {
     return null;
   }
@@ -38,6 +47,7 @@ export async function POST(request: Request) {
   try {
     const data = verifyCredentialSchema.parse(await request.json());
     const pastedCredential = parseCredentialInput(data.credentialJson);
+    const hasPastedCredentialJson = Boolean(data.credentialJson?.trim());
     const lookupId = pastedCredential?.id ?? data.credentialId;
 
     const credential = lookupId
@@ -64,9 +74,13 @@ export async function POST(request: Request) {
       : null;
 
     const issuer = credential?.issuer ?? issuerFromPayload;
-    const credentialPayload = credential
+    const storedCredentialPayload = credential
       ? parseCredentialInput(credential.credentialJson)
-      : pastedCredential;
+      : null;
+    const credentialPayload = pastedCredential ?? storedCredentialPayload;
+    const presentedCredentialHash = safeHashCredential(
+      pastedCredential ?? storedCredentialPayload
+    );
     const payloadExpiry = credentialPayload?.expirationDate
       ? new Date(credentialPayload.expirationDate)
       : null;
@@ -79,6 +93,21 @@ export async function POST(request: Request) {
         detail: credential
           ? `Matched database credential ${credential.credentialId}`
           : "No matching credential record was found"
+      },
+      {
+        label: "Presented credential hash matches stored hash",
+        passed:
+          Boolean(credential?.credentialHash) &&
+          Boolean(presentedCredentialHash) &&
+          credential?.credentialHash?.toLowerCase() ===
+            presentedCredentialHash?.toLowerCase(),
+        detail: credential
+          ? hasPastedCredentialJson && !pastedCredential
+            ? "Pasted credential JSON is invalid or does not match the StudentCredential schema"
+            : `Stored hash ${credential.credentialHash ?? "missing"}, presented hash ${
+                presentedCredentialHash ?? "unavailable"
+              }`
+          : "Hash cannot be checked without a database credential"
       },
       {
         label: "Credential status is ISSUED",

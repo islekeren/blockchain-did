@@ -5,9 +5,14 @@ export const walletAddressSchema = z
   .trim()
   .regex(/^0x[a-fA-F0-9]{40}$/, "Use a 0x-prefixed 20 byte address");
 
+export const didEthrSchema = z
+  .string()
+  .trim()
+  .regex(/^did:ethr:0x[a-fA-F0-9]{40}$/, "Use a did:ethr:0x... DID");
+
 export const createIssuerSchema = z.object({
   name: z.string().trim().min(2),
-  did: z.string().trim().min(10),
+  did: didEthrSchema,
   walletAddress: walletAddressSchema,
   trusted: z.boolean().optional()
 });

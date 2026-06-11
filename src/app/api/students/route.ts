@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { normalizeWalletAddress } from "@/lib/blockchain/address";
 import { prisma } from "@/lib/db/prisma";
 import { createStudentSchema } from "@/lib/validation/schemas";
 
@@ -28,6 +29,7 @@ export async function POST(request: Request) {
     const student = await prisma.student.create({
       data: {
         ...data,
+        walletAddress: normalizeWalletAddress(data.walletAddress),
         active: data.active ?? true
       },
       include: {

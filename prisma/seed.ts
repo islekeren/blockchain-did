@@ -1,8 +1,13 @@
 import { PrismaClient } from "@prisma/client";
+import { didForWalletAddress, normalizeWalletAddress } from "../src/lib/blockchain/address";
 import { hashCredentialPayload } from "../src/lib/credential/hash";
 import { buildStudentCredential } from "../src/lib/credential/vc";
 
 const prisma = new PrismaClient();
+
+function issuerDid(address: string) {
+  return didForWalletAddress(address);
+}
 
 function addDays(date: Date, days: number) {
   const next = new Date(date);
@@ -19,8 +24,10 @@ async function main() {
   const ankara = await prisma.issuer.create({
     data: {
       name: "Ankara University",
-      did: "did:ethr:0xA111111111111111111111111111111111111111",
-      walletAddress: "0xA111111111111111111111111111111111111111",
+      did: issuerDid("0xA111111111111111111111111111111111111111"),
+      walletAddress: normalizeWalletAddress(
+        "0xA111111111111111111111111111111111111111"
+      ),
       trusted: true
     }
   });
@@ -28,8 +35,10 @@ async function main() {
   const fake = await prisma.issuer.create({
     data: {
       name: "Fake University",
-      did: "did:ethr:0xF222222222222222222222222222222222222222",
-      walletAddress: "0xF222222222222222222222222222222222222222",
+      did: issuerDid("0xF222222222222222222222222222222222222222"),
+      walletAddress: normalizeWalletAddress(
+        "0xF222222222222222222222222222222222222222"
+      ),
       trusted: false
     }
   });
@@ -41,7 +50,9 @@ async function main() {
         studentNo: "2024001",
         department: "Computer Engineering",
         universityId: ankara.id,
-        walletAddress: "0x1000000000000000000000000000000000000001",
+        walletAddress: normalizeWalletAddress(
+          "0x1000000000000000000000000000000000000001"
+        ),
         active: true
       }
     }),
@@ -51,7 +62,9 @@ async function main() {
         studentNo: "2024002",
         department: "Information Systems",
         universityId: ankara.id,
-        walletAddress: "0x1000000000000000000000000000000000000002",
+        walletAddress: normalizeWalletAddress(
+          "0x1000000000000000000000000000000000000002"
+        ),
         active: true
       }
     }),
@@ -61,7 +74,9 @@ async function main() {
         studentNo: "2024003",
         department: "Mathematics",
         universityId: ankara.id,
-        walletAddress: "0x1000000000000000000000000000000000000003",
+        walletAddress: normalizeWalletAddress(
+          "0x1000000000000000000000000000000000000003"
+        ),
         active: false
       }
     }),
@@ -71,7 +86,9 @@ async function main() {
         studentNo: "2024004",
         department: "Economics",
         universityId: fake.id,
-        walletAddress: "0x1000000000000000000000000000000000000004",
+        walletAddress: normalizeWalletAddress(
+          "0x1000000000000000000000000000000000000004"
+        ),
         active: true
       }
     }),
@@ -81,7 +98,9 @@ async function main() {
         studentNo: "2024005",
         department: "Electrical Engineering",
         universityId: ankara.id,
-        walletAddress: "0x1000000000000000000000000000000000000005",
+        walletAddress: normalizeWalletAddress(
+          "0x1000000000000000000000000000000000000005"
+        ),
         active: true
       }
     })
