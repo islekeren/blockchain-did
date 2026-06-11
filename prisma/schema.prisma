@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Issuer {
+  id            String       @id @default(cuid())
+  name          String
+  did           String       @unique
+  walletAddress String       @unique
+  trusted       Boolean      @default(false)
+  students      Student[]
+  credentials   Credential[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model Student {
+  id            String       @id @default(cuid())
+  name          String
+  studentNo     String       @unique
+  department    String
+  universityId  String
+  university    Issuer       @relation(fields: [universityId], references: [id], onDelete: Restrict)
+  walletAddress String       @unique
+  active        Boolean      @default(true)
+  credentials   Credential[]
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@index([universityId])
+}
+
+model Credential {
+  id             String       @id @default(cuid())
+  credentialId   String       @unique
+  studentId      String
+  student        Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  issuerId       String
+  issuer         Issuer       @relation(fields: [issuerId], references: [id], onDelete: Restrict)
+  type           String       @default("StudentCredential")
+  schemaName     String       @default("StudentCredential")
+  credentialJson String
+  credentialHash String?
+  status         String       @default("ISSUED")
+  issuedAt       DateTime
+  expiresAt      DateTime
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([studentId])
+  @@index([issuerId])
+  @@index([credentialId])
+}
+
+model VerificationRequest {
+  id           String   @id @default(cuid())
+  credentialId String?
+  verifierName String
+  result       String   @default("PENDING")
+  reasons      String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([credentialId])
+}
