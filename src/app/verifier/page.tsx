@@ -6,7 +6,7 @@ export default function VerifierPage() {
     <PageShell
       role="Discount Platform / Verifier"
       title="Student Discount Verification"
-      description="The verifier role approves or rejects a credential using local off-chain checks: credential existence, issued status, active student flag, expiration, and trusted issuer status."
+      description="The verifier role approves or rejects a credential using both local off-chain checks and on-chain registry checks from the local StudentVerificationRegistry contract."
     >
       <VerifierDashboard />
     </PageShell>

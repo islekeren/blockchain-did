@@ -7,7 +7,11 @@ type StatusBadgeProps = {
 export function StatusBadge({ value }: StatusBadgeProps) {
   const normalized = value.toUpperCase();
 
-  if (["TRUSTED", "ACTIVE", "ISSUED", "APPROVED"].includes(normalized)) {
+  if (
+    ["TRUSTED", "ACTIVE", "ISSUED", "APPROVED", "REGISTERED"].includes(
+      normalized
+    )
+  ) {
     return <Badge variant="success">{value}</Badge>;
   }
 

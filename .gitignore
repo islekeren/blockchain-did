@@ -3,6 +3,9 @@ node_modules
 out
 dist
 coverage
+artifacts
+cache
+typechain-types
 .env*.local
 .env
 *.log

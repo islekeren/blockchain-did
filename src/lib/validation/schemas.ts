@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { CREDENTIAL_STATUSES } from "@/lib/domain/status";
+
 export const walletAddressSchema = z
   .string()
   .trim()
@@ -38,6 +40,10 @@ export const issueCredentialSchema = z.object({
   studentId: z.string().trim().min(1),
   issuerId: z.string().trim().min(1).optional(),
   expiresAt: z.string().datetime().optional()
+});
+
+export const updateCredentialSchema = z.object({
+  status: z.enum(CREDENTIAL_STATUSES)
 });
 
 export const verifyCredentialSchema = z

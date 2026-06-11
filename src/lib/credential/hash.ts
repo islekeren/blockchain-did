@@ -74,9 +74,8 @@ export function hashCredentialCanonicalInput(input: CredentialHashInput) {
 }
 
 /**
- * Deterministic placeholder for the future Solidity-side credential hash.
- * This intentionally hashes ABI-encoded canonical fields, not raw JSON, so the
- * next contract phase can reproduce it with keccak256(abi.encode(...)).
+ * Deterministic credential hash for DB storage and on-chain registry writes.
+ * This intentionally hashes ABI-encoded canonical fields, not raw JSON.
  */
 export function hashCredentialPayload(payload: StudentCredentialPayload) {
   return hashCredentialCanonicalInput(credentialHashInputFromPayload(payload));

@@ -6,7 +6,7 @@ export default function IssuerPage() {
     <PageShell
       role="University / Issuer"
       title="Student Credential Issuance"
-      description="The issuer role manages student records and creates privacy-preserving student credentials for active students. Issued credentials are stored locally with a deterministic hash placeholder for future on-chain registration."
+      description="The issuer role manages student records, creates privacy-preserving credentials, and can register or revoke credential hashes in the local StudentVerificationRegistry contract."
     >
       <IssuerDashboard />
     </PageShell>

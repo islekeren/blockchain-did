@@ -1,19 +1,21 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   FileBadge,
   Plus,
   RefreshCw,
   ShieldCheck,
+  ShieldX,
   UserCheck,
   UserX
 } from "lucide-react";
 
 import { Field } from "@/components/dashboard/field";
-import { PlaceholderCard } from "@/components/dashboard/placeholder-card";
 import { StatusBadge } from "@/components/dashboard/status-badge";
+import { WalletConnect } from "@/components/wallet-connect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -48,6 +50,14 @@ import {
   TableRow
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useWallet } from "@/hooks/useWallet";
+import {
+  getCredentialIssuerOnChain,
+  isCredentialRegisteredOnChain,
+  isCredentialRevokedOnChain,
+  registerCredentialHashOnChain,
+  revokeCredentialOnChain
+} from "@/lib/blockchain/registryClient";
 import type { CredentialRecord, IssuerRecord, StudentRecord } from "@/lib/types";
 
 type IssuersResponse = {
@@ -60,6 +70,20 @@ type StudentsResponse = {
 
 type CredentialsResponse = {
   credentials: CredentialRecord[];
+};
+
+type TxState = {
+  status: "idle" | "pending" | "success" | "error";
+  txHash?: string;
+  error?: string;
+};
+
+type OnChainCredentialStatus = {
+  loading: boolean;
+  registered?: boolean;
+  revoked?: boolean;
+  issuer?: string;
+  error?: string;
 };
 
 const emptyStudentForm = {
@@ -79,7 +103,28 @@ function shortHash(value?: string | null) {
   return `${value.slice(0, 10)}...${value.slice(-8)}`;
 }
 
+function TxFeedback({ state }: { state?: TxState }) {
+  if (!state || state.status === "idle") {
+    return null;
+  }
+
+  if (state.status === "pending") {
+    return <p className="text-xs text-muted-foreground">Transaction pending...</p>;
+  }
+
+  if (state.status === "success") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Tx <span className="font-mono">{shortHash(state.txHash)}</span>
+      </p>
+    );
+  }
+
+  return <p className="max-w-72 text-xs text-destructive">{state.error}</p>;
+}
+
 export function IssuerDashboard() {
+  const wallet = useWallet();
   const [issuers, setIssuers] = useState<IssuerRecord[]>([]);
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
@@ -89,6 +134,10 @@ export function IssuerDashboard() {
   const [form, setForm] = useState(emptyStudentForm);
   const [message, setMessage] = useState<string | null>(null);
   const [lastIssued, setLastIssued] = useState<string | null>(null);
+  const [onChainCredentials, setOnChainCredentials] = useState<
+    Record<string, OnChainCredentialStatus>
+  >({});
+  const [credentialTx, setCredentialTx] = useState<Record<string, TxState>>({});
 
   async function loadData() {
     setLoading(true);
@@ -118,6 +167,86 @@ export function IssuerDashboard() {
     () => students.filter((student) => student.active).length,
     [students]
   );
+
+  const onChainRegisteredCount = useMemo(
+    () =>
+      credentials.filter(
+        (credential) => onChainCredentials[credential.id]?.registered === true
+      ).length,
+    [credentials, onChainCredentials]
+  );
+
+  const loadOnChainCredential = useCallback(async (credential: CredentialRecord) => {
+    if (!credential.credentialHash) {
+      setOnChainCredentials((current) => ({
+        ...current,
+        [credential.id]: {
+          loading: false,
+          error: "Credential hash is missing"
+        }
+      }));
+      return;
+    }
+
+    setOnChainCredentials((current) => ({
+      ...current,
+      [credential.id]: { loading: true }
+    }));
+
+    try {
+      const [registered, revoked, issuer] = await Promise.all([
+        isCredentialRegisteredOnChain({
+          credentialHash: credential.credentialHash
+        }),
+        isCredentialRevokedOnChain({
+          credentialHash: credential.credentialHash
+        }),
+        getCredentialIssuerOnChain({
+          credentialHash: credential.credentialHash
+        })
+      ]);
+
+      setOnChainCredentials((current) => ({
+        ...current,
+        [credential.id]: {
+          loading: false,
+          registered,
+          revoked,
+          issuer
+        }
+      }));
+    } catch (error) {
+      setOnChainCredentials((current) => ({
+        ...current,
+        [credential.id]: {
+          loading: false,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Credential on-chain read failed"
+        }
+      }));
+    }
+  }, []);
+
+  const refreshOnChainCredentials = useCallback(async () => {
+    if (!wallet.hasMetaMask || !wallet.isLocalHardhat) {
+      return;
+    }
+
+    await Promise.all(
+      credentials.map((credential) => loadOnChainCredential(credential))
+    );
+  }, [
+    credentials,
+    loadOnChainCredential,
+    wallet.hasMetaMask,
+    wallet.isLocalHardhat
+  ]);
+
+  useEffect(() => {
+    void refreshOnChainCredentials();
+  }, [refreshOnChainCredentials]);
 
   async function createStudent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -182,9 +311,93 @@ export function IssuerDashboard() {
     await loadData();
   }
 
+  function setCredentialTxState(credentialId: string, nextState: TxState) {
+    setCredentialTx((current) => ({
+      ...current,
+      [credentialId]: nextState
+    }));
+  }
+
+  async function registerCredentialHash(credential: CredentialRecord) {
+    if (!credential.credentialHash) {
+      setCredentialTxState(credential.id, {
+        status: "error",
+        error: "Credential hash is missing"
+      });
+      return;
+    }
+
+    setCredentialTxState(credential.id, { status: "pending" });
+
+    try {
+      const result = await registerCredentialHashOnChain({
+        credentialHash: credential.credentialHash
+      });
+      setCredentialTxState(credential.id, {
+        status: "success",
+        txHash: result.txHash
+      });
+      await loadOnChainCredential(credential);
+      await wallet.refresh();
+    } catch (error) {
+      setCredentialTxState(credential.id, {
+        status: "error",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Credential hash registration failed"
+      });
+    }
+  }
+
+  async function revokeCredential(credential: CredentialRecord) {
+    if (!credential.credentialHash) {
+      setCredentialTxState(credential.id, {
+        status: "error",
+        error: "Credential hash is missing"
+      });
+      return;
+    }
+
+    setCredentialTxState(credential.id, { status: "pending" });
+
+    try {
+      const result = await revokeCredentialOnChain({
+        credentialHash: credential.credentialHash
+      });
+
+      const response = await fetch(`/api/credentials/${credential.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "REVOKED" })
+      });
+
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        throw new Error(data.error ?? "Credential was revoked on-chain, but DB status update failed.");
+      }
+
+      setCredentialTxState(credential.id, {
+        status: "success",
+        txHash: result.txHash
+      });
+      await loadData();
+      await loadOnChainCredential(credential);
+      await wallet.refresh();
+    } catch (error) {
+      setCredentialTxState(credential.id, {
+        status: "error",
+        error:
+          error instanceof Error ? error.message : "Credential revocation failed"
+      });
+    }
+  }
+
+  const blockchainActionsDisabled = !wallet.hasMetaMask || !wallet.isLocalHardhat;
+
   return (
     <div className="grid gap-6">
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-3">
             <CardDescription>Students</CardDescription>
@@ -203,7 +416,15 @@ export function IssuerDashboard() {
             <CardTitle className="text-3xl">{credentials.length}</CardTitle>
           </CardHeader>
         </Card>
+        <Card>
+          <CardHeader className="pb-3">
+            <CardDescription>Registered on-chain</CardDescription>
+            <CardTitle className="text-3xl">{onChainRegisteredCount}</CardTitle>
+          </CardHeader>
+        </Card>
       </div>
+
+      <WalletConnect wallet={wallet} />
 
       {message ? (
         <Alert variant="destructive">
@@ -216,7 +437,7 @@ export function IssuerDashboard() {
         <Alert variant="success">
           <AlertTitle>Credential issued</AlertTitle>
           <AlertDescription>
-            Stored locally as {lastIssued}. The hash is ready for future on-chain registration.
+            Stored locally as {lastIssued}. Register its hash on-chain from the Credentials tab.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -227,10 +448,18 @@ export function IssuerDashboard() {
             <TabsTrigger value="students">Students</TabsTrigger>
             <TabsTrigger value="credentials">Credentials</TabsTrigger>
           </TabsList>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => void loadData()}>
               <RefreshCw />
-              Refresh
+              Refresh DB
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void refreshOnChainCredentials()}
+              disabled={blockchainActionsDisabled}
+            >
+              <ShieldCheck />
+              Refresh On-chain
             </Button>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
@@ -240,7 +469,7 @@ export function IssuerDashboard() {
                 </Button>
               </DialogTrigger>
               <DialogContent>
-                <form onSubmit={createStudent} className="space-y-5">
+                <form onSubmit={createStudent} className="flex flex-col gap-5">
                   <DialogHeader>
                     <DialogTitle>Add student</DialogTitle>
                     <DialogDescription>
@@ -424,7 +653,7 @@ export function IssuerDashboard() {
             <CardHeader>
               <CardTitle>Issued credentials</CardTitle>
               <CardDescription>
-                Each credential stores minimal presentation JSON and a deterministic hash placeholder.
+                Register credential hashes on-chain with a trusted issuer wallet, then revoke only from the original issuer wallet.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -436,43 +665,122 @@ export function IssuerDashboard() {
                     <TableHead>Issuer</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Expires</TableHead>
-                    <TableHead>Hash</TableHead>
-                    <TableHead className="text-right">On-chain</TableHead>
+                    <TableHead>Credential Hash</TableHead>
+                    <TableHead>Registered On-chain</TableHead>
+                    <TableHead>Revoked On-chain</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {credentials.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7}>No credentials issued yet.</TableCell>
+                      <TableCell colSpan={9}>No credentials issued yet.</TableCell>
                     </TableRow>
                   ) : (
-                    credentials.map((credential) => (
-                      <TableRow key={credential.id}>
-                        <TableCell className="max-w-48 truncate font-mono text-xs">
-                          {credential.credentialId}
-                        </TableCell>
-                        <TableCell>{credential.student?.name ?? "Unknown"}</TableCell>
-                        <TableCell>{credential.issuer?.name ?? "Unknown"}</TableCell>
-                        <TableCell>
-                          <StatusBadge value={credential.status} />
-                        </TableCell>
-                        <TableCell>
-                          {new Date(credential.expiresAt).toLocaleDateString()}
-                        </TableCell>
-                        <TableCell className="font-mono text-xs">
-                          {shortHash(credential.credentialHash)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex justify-end">
-                            {/* TODO: Wire this to registerCredentialHashOnChain() after credential registry contracts exist. */}
-                            <Button size="sm" variant="outline" disabled>
-                              <ShieldCheck />
-                              Register hash later
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))
+                    credentials.map((credential) => {
+                      const chainStatus = onChainCredentials[credential.id];
+                      const txState = credentialTx[credential.id];
+
+                      return (
+                        <TableRow key={credential.id}>
+                          <TableCell className="max-w-48 truncate font-mono text-xs">
+                            {credential.credentialId}
+                          </TableCell>
+                          <TableCell>{credential.student?.name ?? "Unknown"}</TableCell>
+                          <TableCell>{credential.issuer?.name ?? "Unknown"}</TableCell>
+                          <TableCell>
+                            <StatusBadge value={credential.status} />
+                          </TableCell>
+                          <TableCell>
+                            {new Date(credential.expiresAt).toLocaleDateString()}
+                          </TableCell>
+                          <TableCell
+                            className="max-w-52 truncate font-mono text-xs"
+                            title={credential.credentialHash ?? "Missing hash"}
+                          >
+                            {shortHash(credential.credentialHash)}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-col gap-1">
+                              {chainStatus?.loading ? (
+                                <Badge variant="warning">Checking</Badge>
+                              ) : chainStatus?.error ? (
+                                <Badge variant="destructive">Unavailable</Badge>
+                              ) : typeof chainStatus?.registered === "boolean" ? (
+                                <StatusBadge
+                                  value={
+                                    chainStatus.registered
+                                      ? "Registered"
+                                      : "Rejected"
+                                  }
+                                />
+                              ) : (
+                                <Badge variant="neutral">Not checked</Badge>
+                              )}
+                              {chainStatus?.issuer ? (
+                                <span
+                                  className="max-w-44 truncate font-mono text-xs text-muted-foreground"
+                                  title={chainStatus.issuer}
+                                >
+                                  {shortHash(chainStatus.issuer)}
+                                </span>
+                              ) : null}
+                              {chainStatus?.error ? (
+                                <span className="max-w-48 text-xs text-muted-foreground">
+                                  {chainStatus.error}
+                                </span>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {chainStatus?.loading ? (
+                              <Badge variant="warning">Checking</Badge>
+                            ) : chainStatus?.error ? (
+                              <Badge variant="destructive">Unavailable</Badge>
+                            ) : typeof chainStatus?.revoked === "boolean" ? (
+                              <StatusBadge
+                                value={chainStatus.revoked ? "Revoked" : "Active"}
+                              />
+                            ) : (
+                              <Badge variant="neutral">Not checked</Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-col items-end gap-2">
+                              <div className="flex flex-wrap justify-end gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => void registerCredentialHash(credential)}
+                                  disabled={
+                                    blockchainActionsDisabled ||
+                                    txState?.status === "pending" ||
+                                    !credential.credentialHash
+                                  }
+                                >
+                                  <ShieldCheck />
+                                  Register Hash On-chain
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => void revokeCredential(credential)}
+                                  disabled={
+                                    blockchainActionsDisabled ||
+                                    txState?.status === "pending" ||
+                                    !credential.credentialHash
+                                  }
+                                >
+                                  <ShieldX />
+                                  Revoke On-chain
+                                </Button>
+                              </div>
+                              <TxFeedback state={txState} />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -480,23 +788,6 @@ export function IssuerDashboard() {
           </Card>
         </TabsContent>
       </Tabs>
-
-      <PlaceholderCard
-        title="Credential Registry Integration"
-        description="This phase only stores credential hashes locally. Future smart contracts can register hashes, revoke credentials, and expose trusted issuer reads."
-        actions={
-          <>
-            {/* TODO: Wire to registerCredentialHashOnChain(). */}
-            <Button disabled variant="outline">
-              Register credential hash on-chain later
-            </Button>
-            {/* TODO: Wire to revokeCredentialOnChain(). */}
-            <Button disabled variant="outline">
-              Revoke credential on-chain later
-            </Button>
-          </>
-        }
-      />
     </div>
   );
 }

@@ -6,7 +6,7 @@ export default function AdminPage() {
     <PageShell
       role="Admin"
       title="Issuer Registry Control"
-      description="The admin role manages trusted university issuers in the local registry. The on-chain issuer registry is intentionally represented as a disabled placeholder for the smart contract phase."
+      description="The admin role manages trusted university issuers in the local database and can register issuers and schemas in the local StudentVerificationRegistry contract."
     >
       <AdminDashboard />
     </PageShell>

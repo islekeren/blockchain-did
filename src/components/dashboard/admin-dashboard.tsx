@@ -1,12 +1,13 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Building2, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Building2, FileCheck2, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 
 import { Field } from "@/components/dashboard/field";
-import { PlaceholderCard } from "@/components/dashboard/placeholder-card";
 import { StatusBadge } from "@/components/dashboard/status-badge";
+import { WalletConnect } from "@/components/wallet-connect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -25,6 +26,7 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -33,10 +35,42 @@ import {
   TableHeader,
   TableRow
 } from "@/components/ui/table";
+import { useWallet } from "@/hooks/useWallet";
+import {
+  getIssuerDidOnChain,
+  isSchemaValidOnChain,
+  isTrustedIssuerOnChain,
+  registerIssuerOnChain,
+  registerSchemaOnChain,
+  removeIssuerOnChain
+} from "@/lib/blockchain/registryClient";
+import {
+  STUDENT_CREDENTIAL_SCHEMA,
+  STUDENT_CREDENTIAL_SCHEMA_HASH
+} from "@/lib/credential/schema";
 import type { IssuerRecord } from "@/lib/types";
 
 type IssuerResponse = {
   issuers: IssuerRecord[];
+};
+
+type TxState = {
+  status: "idle" | "pending" | "success" | "error";
+  txHash?: string;
+  error?: string;
+};
+
+type OnChainIssuerStatus = {
+  loading: boolean;
+  trusted?: boolean;
+  did?: string;
+  error?: string;
+};
+
+type SchemaStatus = {
+  loading: boolean;
+  valid?: boolean;
+  error?: string;
 };
 
 const emptyForm = {
@@ -46,13 +80,54 @@ const emptyForm = {
   trusted: false
 };
 
+const idleTx: TxState = {
+  status: "idle"
+};
+
+function shortHash(value?: string | null) {
+  if (!value) {
+    return "Unavailable";
+  }
+
+  return `${value.slice(0, 10)}...${value.slice(-8)}`;
+}
+
+function TxFeedback({ state }: { state?: TxState }) {
+  if (!state || state.status === "idle") {
+    return null;
+  }
+
+  if (state.status === "pending") {
+    return <p className="text-xs text-muted-foreground">Transaction pending...</p>;
+  }
+
+  if (state.status === "success") {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Tx <span className="font-mono">{shortHash(state.txHash)}</span>
+      </p>
+    );
+  }
+
+  return <p className="max-w-64 text-xs text-destructive">{state.error}</p>;
+}
+
 export function AdminDashboard() {
+  const wallet = useWallet();
   const [issuers, setIssuers] = useState<IssuerRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [message, setMessage] = useState<string | null>(null);
+  const [onChainIssuers, setOnChainIssuers] = useState<
+    Record<string, OnChainIssuerStatus>
+  >({});
+  const [issuerTx, setIssuerTx] = useState<Record<string, TxState>>({});
+  const [schemaStatus, setSchemaStatus] = useState<SchemaStatus>({
+    loading: false
+  });
+  const [schemaTx, setSchemaTx] = useState<TxState>(idleTx);
 
   async function loadIssuers() {
     setLoading(true);
@@ -70,6 +145,77 @@ export function AdminDashboard() {
     () => issuers.filter((issuer) => issuer.trusted).length,
     [issuers]
   );
+
+  const onChainTrustedCount = useMemo(
+    () =>
+      issuers.filter((issuer) => onChainIssuers[issuer.id]?.trusted === true)
+        .length,
+    [issuers, onChainIssuers]
+  );
+
+  const loadOnChainIssuer = useCallback(async (issuer: IssuerRecord) => {
+    setOnChainIssuers((current) => ({
+      ...current,
+      [issuer.id]: { loading: true }
+    }));
+
+    try {
+      const [trusted, did] = await Promise.all([
+        isTrustedIssuerOnChain({ issuerAddress: issuer.walletAddress }),
+        getIssuerDidOnChain({ issuerAddress: issuer.walletAddress })
+      ]);
+
+      setOnChainIssuers((current) => ({
+        ...current,
+        [issuer.id]: { loading: false, trusted, did }
+      }));
+    } catch (error) {
+      setOnChainIssuers((current) => ({
+        ...current,
+        [issuer.id]: {
+          loading: false,
+          error: error instanceof Error ? error.message : "On-chain read failed"
+        }
+      }));
+    }
+  }, []);
+
+  const loadSchemaStatus = useCallback(async () => {
+    setSchemaStatus({ loading: true });
+
+    try {
+      const valid = await isSchemaValidOnChain({
+        schemaHash: STUDENT_CREDENTIAL_SCHEMA_HASH
+      });
+      setSchemaStatus({ loading: false, valid });
+    } catch (error) {
+      setSchemaStatus({
+        loading: false,
+        error: error instanceof Error ? error.message : "Schema read failed"
+      });
+    }
+  }, []);
+
+  const refreshOnChainState = useCallback(async () => {
+    if (!wallet.hasMetaMask || !wallet.isLocalHardhat) {
+      return;
+    }
+
+    await Promise.all([
+      ...issuers.map((issuer) => loadOnChainIssuer(issuer)),
+      loadSchemaStatus()
+    ]);
+  }, [
+    issuers,
+    loadOnChainIssuer,
+    loadSchemaStatus,
+    wallet.hasMetaMask,
+    wallet.isLocalHardhat
+  ]);
+
+  useEffect(() => {
+    void refreshOnChainState();
+  }, [refreshOnChainState]);
 
   async function createIssuer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -109,6 +255,77 @@ export function AdminDashboard() {
     await loadIssuers();
   }
 
+  function setIssuerTxState(issuerId: string, nextState: TxState) {
+    setIssuerTx((current) => ({
+      ...current,
+      [issuerId]: nextState
+    }));
+  }
+
+  async function registerIssuer(issuer: IssuerRecord) {
+    setIssuerTxState(issuer.id, { status: "pending" });
+
+    try {
+      const result = await registerIssuerOnChain({
+        issuerAddress: issuer.walletAddress,
+        issuerDid: issuer.did
+      });
+      setIssuerTxState(issuer.id, {
+        status: "success",
+        txHash: result.txHash
+      });
+      await loadOnChainIssuer(issuer);
+      await wallet.refresh();
+    } catch (error) {
+      setIssuerTxState(issuer.id, {
+        status: "error",
+        error: error instanceof Error ? error.message : "Issuer registration failed"
+      });
+    }
+  }
+
+  async function removeIssuer(issuer: IssuerRecord) {
+    setIssuerTxState(issuer.id, { status: "pending" });
+
+    try {
+      const result = await removeIssuerOnChain({
+        issuerAddress: issuer.walletAddress
+      });
+      setIssuerTxState(issuer.id, {
+        status: "success",
+        txHash: result.txHash
+      });
+      await loadOnChainIssuer(issuer);
+      await wallet.refresh();
+    } catch (error) {
+      setIssuerTxState(issuer.id, {
+        status: "error",
+        error: error instanceof Error ? error.message : "Issuer removal failed"
+      });
+    }
+  }
+
+  async function registerSchema() {
+    setSchemaTx({ status: "pending" });
+
+    try {
+      const result = await registerSchemaOnChain({
+        schemaHash: STUDENT_CREDENTIAL_SCHEMA_HASH,
+        schemaName: STUDENT_CREDENTIAL_SCHEMA.name
+      });
+      setSchemaTx({ status: "success", txHash: result.txHash });
+      await loadSchemaStatus();
+      await wallet.refresh();
+    } catch (error) {
+      setSchemaTx({
+        status: "error",
+        error: error instanceof Error ? error.message : "Schema registration failed"
+      });
+    }
+  }
+
+  const blockchainActionsDisabled = !wallet.hasMetaMask || !wallet.isLocalHardhat;
+
   return (
     <div className="grid gap-6">
       <div className="grid gap-4 md:grid-cols-3">
@@ -120,17 +337,19 @@ export function AdminDashboard() {
         </Card>
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Trusted locally</CardDescription>
+            <CardDescription>DB trusted</CardDescription>
             <CardTitle className="text-3xl">{trustedCount}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
           <CardHeader className="pb-3">
-            <CardDescription>Registry phase</CardDescription>
-            <CardTitle className="text-3xl">Off-chain</CardTitle>
+            <CardDescription>On-chain trusted</CardDescription>
+            <CardTitle className="text-3xl">{onChainTrustedCount}</CardTitle>
           </CardHeader>
         </Card>
       </div>
+
+      <WalletConnect wallet={wallet} />
 
       {message ? (
         <Alert variant="destructive">
@@ -144,13 +363,21 @@ export function AdminDashboard() {
           <div>
             <CardTitle>Universities / Issuers</CardTitle>
             <CardDescription>
-              These records are stored in SQLite and act as the trusted issuer registry for this phase.
+              DB trust controls the current local app flow. On-chain trust is stored in StudentVerificationRegistry.
             </CardDescription>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => void loadIssuers()}>
               <RefreshCw />
-              Refresh
+              Refresh DB
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void refreshOnChainState()}
+              disabled={blockchainActionsDisabled}
+            >
+              <ShieldCheck />
+              Refresh On-chain
             </Button>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
@@ -160,11 +387,11 @@ export function AdminDashboard() {
                 </Button>
               </DialogTrigger>
               <DialogContent>
-                <form onSubmit={createIssuer} className="space-y-5">
+                <form onSubmit={createIssuer} className="flex flex-col gap-5">
                   <DialogHeader>
                     <DialogTitle>Add university issuer</DialogTitle>
                     <DialogDescription>
-                      Create a local issuer record. On-chain registration will be added in a later phase.
+                      Create a local issuer record. Register it on-chain from the table with the contract owner wallet.
                     </DialogDescription>
                   </DialogHeader>
                   <div className="grid gap-4">
@@ -241,7 +468,8 @@ export function AdminDashboard() {
                 <TableHead>Issuer</TableHead>
                 <TableHead>DID</TableHead>
                 <TableHead>Wallet</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>DB Trusted</TableHead>
+                <TableHead>On-chain Trusted</TableHead>
                 <TableHead>Students</TableHead>
                 <TableHead>Credentials</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -250,73 +478,179 @@ export function AdminDashboard() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={7}>Loading issuers...</TableCell>
+                  <TableCell colSpan={8}>Loading issuers...</TableCell>
                 </TableRow>
               ) : issuers.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7}>No issuers registered yet.</TableCell>
+                  <TableCell colSpan={8}>No issuers registered yet.</TableCell>
                 </TableRow>
               ) : (
-                issuers.map((issuer) => (
-                  <TableRow key={issuer.id}>
-                    <TableCell className="font-medium">{issuer.name}</TableCell>
-                    <TableCell className="max-w-56 truncate font-mono text-xs">
-                      {issuer.did}
-                    </TableCell>
-                    <TableCell className="max-w-44 truncate font-mono text-xs">
-                      {issuer.walletAddress}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge value={issuer.trusted ? "Trusted" : "Untrusted"} />
-                    </TableCell>
-                    <TableCell>{issuer._count?.students ?? 0}</TableCell>
-                    <TableCell>{issuer._count?.credentials ?? 0}</TableCell>
-                    <TableCell>
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void toggleTrusted(issuer)}
-                        >
-                          <ShieldCheck />
-                          {issuer.trusted ? "Untrust" : "Trust"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => void deleteIssuer(issuer.id)}
-                        >
-                          <Trash2 />
-                          Remove
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
+                issuers.map((issuer) => {
+                  const chainStatus = onChainIssuers[issuer.id];
+                  const txState = issuerTx[issuer.id];
+
+                  return (
+                    <TableRow key={issuer.id}>
+                      <TableCell className="font-medium">{issuer.name}</TableCell>
+                      <TableCell className="max-w-56 truncate font-mono text-xs" title={issuer.did}>
+                        {issuer.did}
+                      </TableCell>
+                      <TableCell
+                        className="max-w-44 truncate font-mono text-xs"
+                        title={issuer.walletAddress}
+                      >
+                        {issuer.walletAddress}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge value={issuer.trusted ? "Trusted" : "Untrusted"} />
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          {chainStatus?.loading ? (
+                            <Badge variant="warning">Checking</Badge>
+                          ) : chainStatus?.error ? (
+                            <Badge variant="destructive">Unavailable</Badge>
+                          ) : typeof chainStatus?.trusted === "boolean" ? (
+                            <StatusBadge
+                              value={chainStatus.trusted ? "Trusted" : "Untrusted"}
+                            />
+                          ) : (
+                            <Badge variant="neutral">Not checked</Badge>
+                          )}
+                          {chainStatus?.error ? (
+                            <span className="max-w-48 text-xs text-muted-foreground">
+                              {chainStatus.error}
+                            </span>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell>{issuer._count?.students ?? 0}</TableCell>
+                      <TableCell>{issuer._count?.credentials ?? 0}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col items-end gap-2">
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void toggleTrusted(issuer)}
+                            >
+                              <ShieldCheck />
+                              {issuer.trusted ? "Untrust DB" : "Trust DB"}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void registerIssuer(issuer)}
+                              disabled={
+                                blockchainActionsDisabled ||
+                                txState?.status === "pending"
+                              }
+                            >
+                              <Building2 />
+                              Register On-chain
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void removeIssuer(issuer)}
+                              disabled={
+                                blockchainActionsDisabled ||
+                                txState?.status === "pending"
+                              }
+                            >
+                              <Trash2 />
+                              Remove On-chain
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => void deleteIssuer(issuer.id)}
+                            >
+                              <Trash2 />
+                              Remove DB
+                            </Button>
+                          </div>
+                          <TxFeedback state={txState} />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
         </CardContent>
       </Card>
 
-      <PlaceholderCard
-        title="Blockchain Registry Status"
-        description="Smart contract reads and writes are not connected yet. These controls mark the intended integration points for issuer registry contracts."
-        actions={
-          <>
-            {/* TODO: Wire this to addIssuerOnChain() after the issuer registry contract exists. */}
-            <Button disabled variant="outline">
-              <Building2 />
-              Register Issuer On-chain
+      <Card>
+        <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <CardTitle>Schema Registry</CardTitle>
+            <CardDescription>
+              Register the StudentCredential schema hash on-chain with the contract owner wallet.
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              onClick={() => void loadSchemaStatus()}
+              disabled={blockchainActionsDisabled || schemaStatus.loading}
+            >
+              <RefreshCw />
+              Check Schema
             </Button>
-            {/* TODO: Read issuer registry state from isTrustedIssuerOnChain(). */}
-            <Button disabled variant="outline">
-              <ShieldCheck />
-              Check On-chain Trust
+            <Button
+              onClick={() => void registerSchema()}
+              disabled={blockchainActionsDisabled || schemaTx.status === "pending"}
+            >
+              <FileCheck2 />
+              Register Schema
             </Button>
-          </>
-        }
-      />
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div>
+              <p className="text-xs font-medium uppercase text-muted-foreground">Name</p>
+              <p className="font-medium">{STUDENT_CREDENTIAL_SCHEMA.name}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase text-muted-foreground">Version</p>
+              <p className="font-medium">{STUDENT_CREDENTIAL_SCHEMA.version}</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium uppercase text-muted-foreground">
+                Schema Valid On-chain
+              </p>
+              {schemaStatus.loading ? (
+                <Badge variant="warning">Checking</Badge>
+              ) : schemaStatus.error ? (
+                <Badge variant="destructive">Unavailable</Badge>
+              ) : typeof schemaStatus.valid === "boolean" ? (
+                <StatusBadge value={schemaStatus.valid ? "Approved" : "Rejected"} />
+              ) : (
+                <Badge variant="neutral">Not checked</Badge>
+              )}
+            </div>
+          </div>
+          <Separator />
+          <div>
+            <p className="text-xs font-medium uppercase text-muted-foreground">
+              Deterministic schema hash
+            </p>
+            <p className="break-all font-mono text-xs">
+              {STUDENT_CREDENTIAL_SCHEMA_HASH}
+            </p>
+          </div>
+          {schemaStatus.error ? (
+            <Alert variant="destructive">
+              <AlertTitle>Schema check failed</AlertTitle>
+              <AlertDescription>{schemaStatus.error}</AlertDescription>
+            </Alert>
+          ) : null}
+          <TxFeedback state={schemaTx} />
+        </CardContent>
+      </Card>
     </div>
   );
 }

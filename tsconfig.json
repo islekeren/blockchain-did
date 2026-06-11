@@ -22,6 +22,20 @@
       "@/*": ["./src/*"]
     }
   },
+  "ts-node": {
+    "compilerOptions": {
+      "module": "commonjs",
+      "moduleResolution": "node"
+    }
+  },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "artifacts",
+    "cache",
+    "typechain-types",
+    "hardhat.config.ts",
+    "scripts",
+    "test"
+  ]
 }

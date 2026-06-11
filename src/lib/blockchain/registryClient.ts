@@ -1,85 +1,203 @@
-import { assertBlockchainReady } from "./config";
+import { getAddress, isHexString, ZeroAddress } from "ethers";
+
+import {
+  getReadOnlyRegistryContract,
+  getSignerRegistryContract,
+  toBlockchainErrorMessage
+} from "./provider";
 
 export type ChainWriteResult = {
   txHash: string;
 };
 
-export type AddIssuerOnChainInput = {
-  issuerId: string;
-  name: string;
-  did: string;
-  walletAddress: string;
+type IssuerAddressInput = {
+  issuerAddress: string;
 };
 
-export type RegisterSchemaOnChainInput = {
-  name: string;
-  version: string;
-  uri?: string;
+type SchemaHashInput = {
+  schemaHash: string;
 };
 
-export type RegisterCredentialHashOnChainInput = {
-  credentialId: string;
-  credentialHash: string;
-  issuerWalletAddress: string;
-};
-
-export type RevokeCredentialOnChainInput = {
-  credentialId: string;
+type CredentialHashInput = {
   credentialHash: string;
 };
 
-export type TrustedIssuerOnChainInput = {
-  issuerWalletAddress: string;
-};
-
-export type CredentialRevocationOnChainInput = {
-  credentialHash: string;
-};
-
-export async function addIssuerOnChain(
-  _input: AddIssuerOnChainInput
-): Promise<ChainWriteResult> {
-  // TODO: Call issuer registry smart contract after Solidity contracts exist.
-  void _input;
-  assertBlockchainReady();
+function normalizeAddress(address: string, label: string) {
+  try {
+    return getAddress(address.trim());
+  } catch {
+    throw new Error(`${label} must be a valid Ethereum address.`);
+  }
 }
 
-export async function registerSchemaOnChain(
-  _input: RegisterSchemaOnChainInput
-): Promise<ChainWriteResult> {
-  // TODO: Persist schema metadata on-chain or in a schema registry contract.
-  void _input;
-  assertBlockchainReady();
+function normalizeBytes32(value: string, label: string) {
+  const trimmed = value.trim();
+
+  if (!isHexString(trimmed, 32)) {
+    throw new Error(`${label} must be a 0x-prefixed bytes32 value.`);
+  }
+
+  return trimmed;
 }
 
-export async function registerCredentialHashOnChain(
-  _input: RegisterCredentialHashOnChainInput
-): Promise<ChainWriteResult> {
-  // TODO: Register deterministic credential hash on-chain.
-  void _input;
-  assertBlockchainReady();
+async function sendTransaction(action: () => Promise<{ hash: string; wait: () => Promise<unknown> }>) {
+  try {
+    const tx = await action();
+    await tx.wait();
+
+    return { txHash: tx.hash };
+  } catch (error) {
+    throw new Error(toBlockchainErrorMessage(error));
+  }
 }
 
-export async function revokeCredentialOnChain(
-  _input: RevokeCredentialOnChainInput
-): Promise<ChainWriteResult> {
-  // TODO: Call credential registry revoke function once contracts are added.
-  void _input;
-  assertBlockchainReady();
+async function readContract<T>(action: () => Promise<T>) {
+  try {
+    return await action();
+  } catch (error) {
+    throw new Error(toBlockchainErrorMessage(error));
+  }
 }
 
-export async function isTrustedIssuerOnChain(
-  _input: TrustedIssuerOnChainInput
-): Promise<boolean> {
-  // TODO: Read issuer trust status from the on-chain registry.
-  void _input;
-  assertBlockchainReady();
+export async function isTrustedIssuerOnChain(input: IssuerAddressInput) {
+  const issuerAddress = normalizeAddress(input.issuerAddress, "Issuer address");
+
+  return readContract(async () => {
+    const contract = await getReadOnlyRegistryContract();
+    return Boolean(await contract.isTrustedIssuer(issuerAddress));
+  });
 }
 
-export async function isCredentialRevokedOnChain(
-  _input: CredentialRevocationOnChainInput
-): Promise<boolean> {
-  // TODO: Read credential revocation status from the on-chain registry.
-  void _input;
-  assertBlockchainReady();
+export async function getIssuerDidOnChain(input: IssuerAddressInput) {
+  const issuerAddress = normalizeAddress(input.issuerAddress, "Issuer address");
+
+  return readContract(async () => {
+    const contract = await getReadOnlyRegistryContract();
+    return String(await contract.getIssuerDid(issuerAddress));
+  });
 }
+
+export async function isSchemaValidOnChain(input: SchemaHashInput) {
+  const schemaHash = normalizeBytes32(input.schemaHash, "Schema hash");
+
+  return readContract(async () => {
+    const contract = await getReadOnlyRegistryContract();
+    return Boolean(await contract.isValidSchema(schemaHash));
+  });
+}
+
+export async function getSchemaNameOnChain(input: SchemaHashInput) {
+  const schemaHash = normalizeBytes32(input.schemaHash, "Schema hash");
+
+  return readContract(async () => {
+    const contract = await getReadOnlyRegistryContract();
+    return String(await contract.getSchemaName(schemaHash));
+  });
+}
+
+export async function isCredentialRegisteredOnChain(input: CredentialHashInput) {
+  const credentialHash = normalizeBytes32(
+    input.credentialHash,
+    "Credential hash"
+  );
+
+  return readContract(async () => {
+    const contract = await getReadOnlyRegistryContract();
+    return Boolean(await contract.isRegisteredCredential(credentialHash));
+  });
+}
+
+export async function getCredentialIssuerOnChain(input: CredentialHashInput) {
+  const credentialHash = normalizeBytes32(
+    input.credentialHash,
+    "Credential hash"
+  );
+
+  return readContract(async () => {
+    const contract = await getReadOnlyRegistryContract();
+    const issuer = String(await contract.getCredentialIssuer(credentialHash));
+
+    return issuer === ZeroAddress ? ZeroAddress : getAddress(issuer);
+  });
+}
+
+export async function isCredentialRevokedOnChain(input: CredentialHashInput) {
+  const credentialHash = normalizeBytes32(
+    input.credentialHash,
+    "Credential hash"
+  );
+
+  return readContract(async () => {
+    const contract = await getReadOnlyRegistryContract();
+    return Boolean(await contract.isRevoked(credentialHash));
+  });
+}
+
+export async function registerIssuerOnChain(input: {
+  issuerAddress: string;
+  issuerDid: string;
+}): Promise<ChainWriteResult> {
+  const issuerAddress = normalizeAddress(input.issuerAddress, "Issuer address");
+  const issuerDid = input.issuerDid.trim();
+
+  if (!issuerDid) {
+    throw new Error("Issuer DID cannot be empty.");
+  }
+
+  return sendTransaction(async () => {
+    const contract = await getSignerRegistryContract();
+    return contract.addIssuer(issuerAddress, issuerDid);
+  });
+}
+
+export async function removeIssuerOnChain(input: IssuerAddressInput) {
+  const issuerAddress = normalizeAddress(input.issuerAddress, "Issuer address");
+
+  return sendTransaction(async () => {
+    const contract = await getSignerRegistryContract();
+    return contract.removeIssuer(issuerAddress);
+  });
+}
+
+export async function registerSchemaOnChain(input: {
+  schemaHash: string;
+  schemaName: string;
+}): Promise<ChainWriteResult> {
+  const schemaHash = normalizeBytes32(input.schemaHash, "Schema hash");
+  const schemaName = input.schemaName.trim();
+
+  if (!schemaName) {
+    throw new Error("Schema name cannot be empty.");
+  }
+
+  return sendTransaction(async () => {
+    const contract = await getSignerRegistryContract();
+    return contract.registerSchema(schemaHash, schemaName);
+  });
+}
+
+export async function registerCredentialHashOnChain(input: CredentialHashInput) {
+  const credentialHash = normalizeBytes32(
+    input.credentialHash,
+    "Credential hash"
+  );
+
+  return sendTransaction(async () => {
+    const contract = await getSignerRegistryContract();
+    return contract.registerCredential(credentialHash);
+  });
+}
+
+export async function revokeCredentialOnChain(input: CredentialHashInput) {
+  const credentialHash = normalizeBytes32(
+    input.credentialHash,
+    "Credential hash"
+  );
+
+  return sendTransaction(async () => {
+    const contract = await getSignerRegistryContract();
+    return contract.revokeCredential(credentialHash);
+  });
+}
+
+export const addIssuerOnChain = registerIssuerOnChain;
