@@ -50,8 +50,19 @@ export const verifyCredentialSchema = z
   .object({
     credentialId: z.string().trim().optional(),
     credentialJson: z.string().trim().optional(),
+    presentationProofJson: z.string().trim().optional(),
     verifierName: z.string().trim().min(2).default("EduDiscounts Marketplace")
   })
   .refine((value) => value.credentialId || value.credentialJson, {
     message: "Select or paste a credential to verify"
   });
+
+export const createVerificationChallengeSchema = z.object({
+  verifierName: z.string().trim().min(2).default("EduDiscounts Marketplace")
+});
+
+export const useVerificationRequestSchema = z.object({
+  credentialId: z.string().trim().min(1),
+  credentialHash: z.string().trim().min(1),
+  presentationProofJson: z.string().trim().min(1)
+});

@@ -58,13 +58,36 @@ model Credential {
 }
 
 model VerificationRequest {
-  id           String   @id @default(cuid())
-  credentialId String?
-  verifierName String
-  result       String   @default("PENDING")
-  reasons      String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                 String              @id @default(cuid())
+  credentialId       String?
+  verifierName       String
+  nonce              String?             @unique
+  challengeMessage   String?
+  result             String              @default("PENDING")
+  reasons            String
+  used               Boolean             @default(false)
+  expiresAt          DateTime?
+  presentationProofs PresentationProof[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   @@index([credentialId])
+  @@index([used])
+}
+
+model PresentationProof {
+  id                   String              @id @default(cuid())
+  credentialId         String
+  credentialHash       String
+  studentWalletAddress String
+  requestId            String
+  request              VerificationRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  nonce                String
+  verifierName         String
+  message              String
+  signature            String
+  createdAt            DateTime            @default(now())
+
+  @@index([credentialId])
+  @@index([requestId])
 }

@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getAddress } from "ethers";
-import { CheckCircle2, ShieldQuestion, XCircle } from "lucide-react";
+import { Check, CheckCircle2, Copy, KeyRound, ShieldQuestion, XCircle } from "lucide-react";
 
 import { JsonViewer } from "@/components/dashboard/json-viewer";
 import { StatusBadge } from "@/components/dashboard/status-badge";
@@ -41,6 +41,7 @@ import {
   isStudentCredentialPayload,
   type StudentCredentialPayload
 } from "@/lib/credential/vc";
+import { parsePresentationProof } from "@/lib/presentation/message";
 import type {
   CredentialRecord,
   VerificationCheck,
@@ -55,6 +56,15 @@ type SplitVerificationResult = {
   result: VerificationResult["result"];
   offChainChecks: VerificationCheck[];
   onChainChecks: VerificationCheck[];
+  presentationChecks: VerificationCheck[];
+};
+
+type VerificationChallenge = {
+  requestId: string;
+  nonce: string;
+  verifierName: string;
+  createdAt: string;
+  expiresAt: string;
 };
 
 const onChainCheckLabels = [
@@ -156,10 +166,15 @@ export function VerifierDashboard() {
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
   const [credentialJson, setCredentialJson] = useState("");
+  const [presentationProofJson, setPresentationProofJson] = useState("");
   const [verifierName, setVerifierName] = useState("EduDiscounts Marketplace");
   const [result, setResult] = useState<SplitVerificationResult | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [challenge, setChallenge] = useState<VerificationChallenge | null>(null);
+  const [creatingChallenge, setCreatingChallenge] = useState(false);
+  const [challengeMessage, setChallengeMessage] = useState<string | null>(null);
+  const [challengeCopied, setChallengeCopied] = useState(false);
 
   async function loadCredentials() {
     const response = await fetch("/api/credentials", { cache: "no-store" });
@@ -186,6 +201,42 @@ export function VerifierDashboard() {
       credential ? JSON.stringify(credential.credentialJson, null, 2) : ""
     );
     setResult(null);
+  }
+
+  async function createChallenge() {
+    setCreatingChallenge(true);
+    setChallengeMessage(null);
+
+    const response = await fetch("/api/verification-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ verifierName })
+    });
+
+    const data = (await response.json()) as {
+      challenge?: VerificationChallenge;
+      error?: string;
+    };
+
+    if (!response.ok || !data.challenge) {
+      setChallengeMessage(data.error ?? "Unable to create verification challenge");
+      setCreatingChallenge(false);
+      return;
+    }
+
+    setChallenge(data.challenge);
+    setChallengeMessage("Challenge created. Send it to the student wallet.");
+    setCreatingChallenge(false);
+  }
+
+  async function copyChallenge() {
+    if (!challenge) {
+      return;
+    }
+
+    await navigator.clipboard.writeText(JSON.stringify(challenge, null, 2));
+    setChallengeCopied(true);
+    window.setTimeout(() => setChallengeCopied(false), 1500);
   }
 
   async function runOnChainChecks(
@@ -310,6 +361,7 @@ export function VerifierDashboard() {
       credentialPayload,
       presentedCredentialHash
     );
+    const proof = parsePresentationProof(presentationProofJson);
 
     const response = await fetch("/api/verify", {
       method: "POST",
@@ -317,6 +369,7 @@ export function VerifierDashboard() {
       body: JSON.stringify({
         credentialId: selectedCredentialId || undefined,
         credentialJson: credentialJson || undefined,
+        presentationProofJson: presentationProofJson || undefined,
         verifierName
       })
     });
@@ -324,6 +377,7 @@ export function VerifierDashboard() {
     const data = (await response.json()) as VerificationResult & {
       error?: string;
       checks?: VerificationCheck[];
+      presentationChecks?: VerificationCheck[];
     };
 
     if (!response.ok) {
@@ -333,19 +387,57 @@ export function VerifierDashboard() {
     }
 
     const offChainChecks = data.checks ?? [];
+    let presentationChecks = data.presentationChecks ?? [];
     const onChainChecks = await runOnChainChecks(
       offChainChecks,
       credentialPayload,
       presentedCredentialHash ?? matchingCredential?.credentialHash ?? null
     );
-    const approved =
+    let approved =
       offChainChecks.every((check) => check.passed) &&
-      onChainChecks.every((check) => check.passed);
+      onChainChecks.every((check) => check.passed) &&
+      presentationChecks.every((check) => check.passed);
+
+    if (approved && proof) {
+      const consumeResponse = await fetch(
+        `/api/verification-requests/${proof.requestId}/use`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            credentialId:
+              matchingCredential?.credentialId ?? credentialPayload?.id ?? proof.credentialId,
+            credentialHash:
+              presentedCredentialHash ??
+              matchingCredential?.credentialHash ??
+              proof.credentialHash,
+            presentationProofJson
+          })
+        }
+      );
+      const consumeData = (await consumeResponse.json()) as {
+        error?: string;
+      };
+
+      presentationChecks = [
+        ...presentationChecks,
+        {
+          label: "Verification request marked used",
+          passed: consumeResponse.ok,
+          detail: consumeResponse.ok
+            ? "Challenge was consumed after successful verification."
+            : consumeData.error ?? "Challenge could not be consumed."
+        }
+      ];
+
+      approved = approved && consumeResponse.ok;
+    }
 
     setResult({
       result: approved ? "APPROVED" : "REJECTED",
       offChainChecks,
-      onChainChecks
+      onChainChecks,
+      presentationChecks
     });
     setVerifying(false);
   }
@@ -354,25 +446,63 @@ export function VerifierDashboard() {
     <div className="grid gap-6">
       <WalletConnect wallet={wallet} />
 
+      <Card>
+        <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <CardTitle>Create Verification Challenge</CardTitle>
+            <CardDescription>
+              Generate a 10-minute nonce for the student to sign from their wallet.
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void createChallenge()} disabled={creatingChallenge}>
+              <KeyRound />
+              {creatingChallenge ? "Creating..." : "Generate Challenge"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void copyChallenge()}
+              disabled={!challenge}
+            >
+              {challengeCopied ? <Check /> : <Copy />}
+              Copy Challenge
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium">Verifier name</label>
+            <Input
+              value={verifierName}
+              onChange={(event) => setVerifierName(event.target.value)}
+              required
+            />
+          </div>
+          {challengeMessage ? (
+            <Alert variant={challenge ? "success" : "destructive"}>
+              <AlertTitle>{challenge ? "Challenge ready" : "Challenge failed"}</AlertTitle>
+              <AlertDescription>{challengeMessage}</AlertDescription>
+            </Alert>
+          ) : null}
+          <Textarea
+            readOnly
+            value={challenge ? JSON.stringify(challenge, null, 2) : ""}
+            className="min-h-40 font-mono text-xs leading-5"
+            placeholder="Generated challenge JSON will appear here"
+          />
+        </CardContent>
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-[0.95fr_1.05fr]">
         <Card>
           <CardHeader>
             <CardTitle>Credential input</CardTitle>
             <CardDescription>
-              Select a local credential or paste minimal credential JSON copied from the student wallet.
+              Select or paste credential JSON, then paste the signed presentation proof from the student wallet.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={verify} className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Verifier platform</label>
-                <Input
-                  value={verifierName}
-                  onChange={(event) => setVerifierName(event.target.value)}
-                  required
-                />
-              </div>
-
               <div className="flex flex-col gap-2">
                 <label className="text-sm font-medium">Credential record</label>
                 <Select
@@ -409,6 +539,19 @@ export function VerifierDashboard() {
                 />
               </div>
 
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium">Presentation proof JSON</label>
+                <Textarea
+                  value={presentationProofJson}
+                  onChange={(event) => {
+                    setPresentationProofJson(event.target.value);
+                    setResult(null);
+                  }}
+                  className="min-h-52 font-mono text-xs leading-5"
+                  placeholder='Paste {"credentialId":"...","signature":"..."} proof JSON here'
+                />
+              </div>
+
               <Button type="submit" disabled={verifying} className="w-full">
                 <ShieldQuestion />
                 {verifying ? "Verifying..." : "Verify credential"}
@@ -421,7 +564,7 @@ export function VerifierDashboard() {
           <CardHeader>
             <CardTitle>Verification result</CardTitle>
             <CardDescription>
-              The final result requires both local off-chain checks and on-chain registry checks to pass.
+              The final result requires off-chain checks, on-chain checks, and holder presentation proof checks to pass.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
@@ -451,8 +594,8 @@ export function VerifierDashboard() {
                   </AlertTitle>
                   <AlertDescription>
                     {result.result === "APPROVED"
-                      ? "All off-chain and on-chain verification checks passed."
-                      : "One or more required off-chain or on-chain checks failed."}
+                      ? "All off-chain, on-chain, and holder proof checks passed."
+                      : "One or more required credential, registry, or holder proof checks failed."}
                   </AlertDescription>
                 </Alert>
 
@@ -464,6 +607,11 @@ export function VerifierDashboard() {
                 <VerificationSection
                   title="On-chain checks"
                   checks={result.onChainChecks}
+                />
+                <Separator />
+                <VerificationSection
+                  title="Holder presentation proof checks"
+                  checks={result.presentationChecks}
                 />
               </div>
             ) : null}

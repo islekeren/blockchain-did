@@ -7,6 +7,8 @@ import {
   type StudentCredentialPayload
 } from "@/lib/credential/vc";
 import { prisma } from "@/lib/db/prisma";
+import { parsePresentationProof } from "@/lib/presentation/message";
+import { buildPresentationProofChecks } from "@/lib/presentation/verify";
 import { verifyCredentialSchema } from "@/lib/validation/schemas";
 
 export const runtime = "nodejs";
@@ -81,6 +83,12 @@ export async function POST(request: Request) {
     const presentedCredentialHash = safeHashCredential(
       pastedCredential ?? storedCredentialPayload
     );
+    const presentationProof = parsePresentationProof(data.presentationProofJson);
+    const verificationRequest = presentationProof
+      ? await prisma.verificationRequest.findUnique({
+          where: { id: presentationProof.requestId }
+        })
+      : null;
     const payloadExpiry = credentialPayload?.expirationDate
       ? new Date(credentialPayload.expirationDate)
       : null;
@@ -145,19 +153,46 @@ export async function POST(request: Request) {
       }
     ];
 
-    const approved = checks.every((check) => check.passed);
-    const verification = await prisma.verificationRequest.create({
-      data: {
-        credentialId: credential?.credentialId ?? lookupId ?? null,
-        verifierName: data.verifierName,
-        result: approved ? "APPROVED" : "REJECTED",
-        reasons: JSON.stringify(checks)
-      }
+    const presentation = buildPresentationProofChecks({
+      proofJson: data.presentationProofJson,
+      credentialPayload,
+      credentialHash: presentedCredentialHash,
+      request: verificationRequest,
+      now
+    });
+    const offChainPassed = checks.every((check) => check.passed);
+    const presentationPassed = presentation.checks.every((check) => check.passed);
+    const preliminaryApproved = offChainPassed && presentationPassed;
+    const reasons = JSON.stringify({
+      offChainChecks: checks,
+      presentationChecks: presentation.checks
     });
 
+    const verification = verificationRequest
+      ? verificationRequest.used
+        ? verificationRequest
+        : await prisma.verificationRequest.update({
+          where: { id: verificationRequest.id },
+          data: {
+            credentialId: credential?.credentialId ?? lookupId ?? null,
+            verifierName: verificationRequest.verifierName,
+            result: preliminaryApproved ? "PENDING" : "REJECTED",
+            reasons
+          }
+        })
+      : await prisma.verificationRequest.create({
+          data: {
+            credentialId: credential?.credentialId ?? lookupId ?? null,
+            verifierName: data.verifierName,
+            result: "REJECTED",
+            reasons
+          }
+        });
+
     return NextResponse.json({
-      result: approved ? "APPROVED" : "REJECTED",
+      result: preliminaryApproved ? "APPROVED" : "REJECTED",
       checks,
+      presentationChecks: presentation.checks,
       verification
     });
   } catch (error) {

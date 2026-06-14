@@ -6,7 +6,7 @@ export default function WalletPage() {
     <PageShell
       role="Student / Holder"
       title="Student Credential Wallet"
-      description="The wallet role lets a student select their local account and view credentials issued to them. Presentation signing and MetaMask are intentionally deferred to a later blockchain phase."
+      description="The wallet role lets a student view credentials and sign a verifier challenge with the wallet that owns the credential subject DID."
     >
       <WalletDashboard />
     </PageShell>

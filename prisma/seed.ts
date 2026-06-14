@@ -16,6 +16,7 @@ function addDays(date: Date, days: number) {
 }
 
 async function main() {
+  await prisma.presentationProof.deleteMany();
   await prisma.verificationRequest.deleteMany();
   await prisma.credential.deleteMany();
   await prisma.student.deleteMany();

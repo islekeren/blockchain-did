@@ -181,12 +181,18 @@ Credential JSON is stored as a string for SQLite compatibility and returned as p
   - select a student
   - view credentials for that student
   - copy minimal credential JSON
-  - disabled wallet signing placeholder
+  - paste verifier challenge JSON
+  - connect MetaMask with the student wallet
+  - sign a deterministic presentation message
+  - copy presentation proof JSON
 - Verifier dashboard
+  - generate 10-minute verification challenges
   - select or paste a credential
+  - paste presentation proof JSON
   - approve/reject using local off-chain checks
   - run on-chain issuer, schema, registration, revocation, and issuer-match checks
-  - approve only when both off-chain and on-chain checks pass
+  - verify holder signature, nonce, expiry, and replay status
+  - approve only when off-chain, on-chain, and holder proof checks pass
   - persist verification request results
 
 ## Credential Privacy
@@ -202,6 +208,35 @@ Credential hashes are generated in [src/lib/credential/hash.ts](src/lib/credenti
 The Solidity registry stores the resulting `bytes32` hash. It does not store private student profile data or full credential JSON.
 
 The verifier compares the presented credential payload hash against the stored database hash before running on-chain checks.
+
+## Holder Presentation Proofs
+
+The verifier no longer accepts a valid credential JSON by itself. The verifier first creates a short-lived challenge containing:
+
+- `requestId`
+- `nonce`
+- `verifierName`
+- `createdAt`
+- `expiresAt`
+
+The student opens the wallet page, pastes that challenge, and signs a deterministic human-readable message with MetaMask:
+
+```text
+Student Verification Presentation
+
+Credential ID: ...
+Credential Hash: ...
+Student Wallet: ...
+Verifier: ...
+Request ID: ...
+Nonce: ...
+```
+
+The wallet returns presentation proof JSON containing the credential id, credential hash, student wallet address, request id, nonce, verifier name, exact signed message, and signature.
+
+The verifier checks that the proof matches the credential, the request exists, the nonce matches, the request is not expired, the request has not already been used, the student wallet matches the credential subject DID, the signature recovers to that wallet, and the signed message reconstructs exactly.
+
+Replay prevention is handled by 10-minute challenge expiry plus a `used` flag. A request is marked used only after credential checks, on-chain checks, and holder proof checks all pass. Reusing the same proof/request is rejected.
 
 ## Frontend Blockchain Integration
 
@@ -234,9 +269,14 @@ Browser write calls use the MetaMask signer only. No private keys are stored in 
 8. Switch MetaMask to the issuer wallet.
 9. In **Issuer**, create/activate a student for that issuer and issue a credential in the database.
 10. Register the credential hash on-chain.
-11. In **Verifier**, select or paste the credential and verify it. It is **Approved** only if the off-chain checks and all on-chain checks pass.
-12. Back in **Issuer**, revoke the credential on-chain. The local DB credential status is updated to `REVOKED`.
-13. Verify again and observe a **Rejected** result because the credential is revoked.
+11. In **Verifier**, generate a verification challenge and copy the challenge JSON.
+12. In **Wallet**, select the student credential, paste the challenge, connect the student wallet, and create a presentation proof.
+13. Copy both the credential JSON and the presentation proof JSON.
+14. In **Verifier**, paste/select the credential and paste the proof, then verify. It is **Approved** only if off-chain checks, on-chain checks, and holder proof checks pass.
+15. Verify again with the same proof/request and observe a **Rejected** result because the request is already used.
+16. Try signing from the wrong wallet and observe a **Rejected** result because the recovered signer does not match the credential subject wallet.
+17. Back in **Issuer**, revoke the credential on-chain. The local DB credential status is updated to `REVOKED`.
+18. Generate a fresh challenge/proof and verify again; observe a **Rejected** result because the credential is revoked.
 
 Seeded issuers are useful for local database demos, but their toy wallet addresses are not Hardhat signer accounts. For on-chain write demos, create an issuer that uses an imported Hardhat account address.
 

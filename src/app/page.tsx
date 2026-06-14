@@ -88,8 +88,8 @@ export default function Home() {
             <p className="max-w-2xl text-base leading-7 text-muted-foreground md:text-lg">
               This app models a practical student verification flow across admin,
               issuer, holder, and verifier roles. It stores seed data and issued
-              credentials in SQLite today, while keeping clear integration points
-              for smart contracts and wallet signatures later.
+              credentials in SQLite, anchors hashes on a local Solidity registry,
+              and requires holder wallet signatures for verifier challenges.
             </p>
             <div className="flex flex-wrap gap-3">
               <Button asChild>
