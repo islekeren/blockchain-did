@@ -6,6 +6,7 @@ import {
 } from "../blockchain/address";
 
 export type StudentCredentialPayload = {
+  "@context": string[];
   id: string;
   type: ["VerifiableCredential", "StudentCredential"];
   issuer: {
@@ -23,8 +24,22 @@ export type StudentCredentialPayload = {
     name: "StudentCredential";
     version: "1.0";
   };
+  credentialSchema: {
+    id: string;
+    type: "JsonSchema";
+    name: "StudentCredential";
+    version: "1.0";
+  };
   issuanceDate: string;
   expirationDate: string;
+  proof?: {
+    type: string;
+    created: string;
+    verificationMethod: string;
+    proofPurpose: string;
+    message: string;
+    signature: string;
+  };
 };
 
 type BuildCredentialInput = {
@@ -43,6 +58,7 @@ export function buildStudentCredential({
   const credentialId = `credential-${crypto.randomUUID()}`;
 
   return {
+    "@context": ["https://www.w3.org/2018/credentials/v1"],
     id: credentialId,
     type: ["VerifiableCredential", "StudentCredential"],
     issuer: {
@@ -57,6 +73,12 @@ export function buildStudentCredential({
       university: issuer.name
     },
     schema: {
+      name: "StudentCredential",
+      version: "1.0"
+    },
+    credentialSchema: {
+      id: "urn:student-verification:schemas:student-credential:1.0",
+      type: "JsonSchema",
       name: "StudentCredential",
       version: "1.0"
     },
@@ -98,6 +120,9 @@ export function isStudentCredentialPayload(
     typeof payload.credentialSubject?.university === "string" &&
     payload.schema?.name === "StudentCredential" &&
     payload.schema?.version === "1.0" &&
+    (!payload.credentialSchema ||
+      (payload.credentialSchema.name === "StudentCredential" &&
+        payload.credentialSchema.version === "1.0")) &&
     typeof payload.issuanceDate === "string" &&
     typeof payload.expirationDate === "string"
   );

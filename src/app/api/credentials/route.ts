@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 
+import { writeAuditLog } from "@/lib/audit/log";
+import { authErrorResponse, requireRole, requireUser } from "@/lib/auth/session";
 import { hashCredentialPayload } from "@/lib/credential/hash";
 import { serializeCredential, serializeCredentials } from "@/lib/credential/serialize";
 import { buildStudentCredential } from "@/lib/credential/vc";
@@ -16,27 +19,46 @@ function oneYearFromNow() {
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const studentId = searchParams.get("studentId");
+  try {
+    const user = await requireUser(request);
+    const { searchParams } = new URL(request.url);
+    const studentId = searchParams.get("studentId");
+    const filters: Prisma.CredentialWhereInput[] = [];
 
-  const credentials = await prisma.credential.findMany({
-    where: studentId ? { studentId } : undefined,
-    orderBy: { createdAt: "desc" },
-    include: {
-      student: {
-        include: {
-          university: true
-        }
-      },
-      issuer: true
+    if (studentId) {
+      filters.push({ studentId });
     }
-  });
 
-  return NextResponse.json({ credentials: serializeCredentials(credentials) });
+    if (user.role === "ISSUER") {
+      filters.push({ issuerId: user.issuerId ?? "__none__" });
+    }
+
+    if (user.role === "STUDENT") {
+      filters.push({ studentId: user.studentId ?? "__none__" });
+    }
+
+    const credentials = await prisma.credential.findMany({
+      where: filters.length ? { AND: filters } : undefined,
+      orderBy: { createdAt: "desc" },
+      include: {
+        student: {
+          include: {
+            university: true
+          }
+        },
+        issuer: true
+      }
+    });
+
+    return NextResponse.json({ credentials: serializeCredentials(credentials) });
+  } catch (error) {
+    return authErrorResponse(error) ?? NextResponse.json({ error: "Unable to load credentials" }, { status: 400 });
+  }
 }
 
 export async function POST(request: Request) {
   try {
+    const user = await requireRole(request, ["ADMIN", "ISSUER"]);
     const data = issueCredentialSchema.parse(await request.json());
     const student = await prisma.student.findUnique({
       where: { id: data.studentId },
@@ -55,6 +77,13 @@ export async function POST(request: Request) {
     }
 
     const issuerId = data.issuerId ?? student.universityId;
+    if (user.role === "ISSUER" && issuerId !== user.issuerId) {
+      return NextResponse.json(
+        { error: "Issuer wallets can only issue credentials for their own university." },
+        { status: 403 }
+      );
+    }
+
     if (issuerId !== student.universityId) {
       return NextResponse.json(
         { error: "Issuer must match the student's university" },
@@ -82,7 +111,7 @@ export async function POST(request: Request) {
         schemaName: "StudentCredential",
         credentialJson: JSON.stringify(payload, null, 2),
         credentialHash,
-        status: "ISSUED",
+        status: "PENDING_ONCHAIN",
         issuedAt,
         expiresAt
       },
@@ -95,9 +124,26 @@ export async function POST(request: Request) {
         issuer: true
       }
     });
+    await writeAuditLog({
+      actor: user,
+      action: "credential.create",
+      targetType: "Credential",
+      targetId: credential.id,
+      metadata: {
+        credentialId: credential.credentialId,
+        credentialHash,
+        status: credential.status
+      }
+    });
 
     return NextResponse.json({ credential: serializeCredential(credential) }, { status: 201 });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+
+    if (authResponse) {
+      return authResponse;
+    }
+
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.issues[0]?.message }, { status: 400 });
     }

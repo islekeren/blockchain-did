@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { getAddress } from "ethers";
 import { Check, CheckCircle2, Copy, KeyRound, ShieldQuestion, XCircle } from "lucide-react";
 
 import { JsonViewer } from "@/components/dashboard/json-viewer";
@@ -27,21 +26,6 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { useWallet } from "@/hooks/useWallet";
-import {
-  getCredentialIssuerOnChain,
-  getSchemaNameOnChain,
-  isCredentialRegisteredOnChain,
-  isCredentialRevokedOnChain,
-  isSchemaValidOnChain,
-  isTrustedIssuerOnChain
-} from "@/lib/blockchain/registryClient";
-import { hashCredentialPayload } from "@/lib/credential/hash";
-import { hashCredentialSchema } from "@/lib/credential/schema";
-import {
-  isStudentCredentialPayload,
-  type StudentCredentialPayload
-} from "@/lib/credential/vc";
-import { parsePresentationProof } from "@/lib/presentation/message";
 import type {
   CredentialRecord,
   VerificationCheck,
@@ -66,74 +50,6 @@ type VerificationChallenge = {
   createdAt: string;
   expiresAt: string;
 };
-
-const onChainCheckLabels = [
-  "Issuer trusted on-chain",
-  "Schema valid on-chain",
-  "Credential hash registered on-chain",
-  "Credential not revoked on-chain",
-  "Credential issuer matches on-chain"
-];
-
-function parseCredentialInput(value?: string) {
-  if (!value?.trim()) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isStudentCredentialPayload(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function safeHashCredential(payload: StudentCredentialPayload | null) {
-  if (!payload) {
-    return null;
-  }
-
-  try {
-    return hashCredentialPayload(payload);
-  } catch {
-    return null;
-  }
-}
-
-function skippedOnChainChecks(reason: string): VerificationCheck[] {
-  return onChainCheckLabels.map((label) => ({
-    label,
-    passed: false,
-    detail: reason
-  }));
-}
-
-function findMatchingCredential(
-  credentials: CredentialRecord[],
-  selectedCredential: CredentialRecord | undefined,
-  payload: StudentCredentialPayload | null,
-  credentialHash: string | null
-) {
-  if (selectedCredential) {
-    return selectedCredential;
-  }
-
-  return credentials.find((credential) => {
-    const hashMatches =
-      Boolean(credentialHash && credential.credentialHash) &&
-      credential.credentialHash?.toLowerCase() === credentialHash?.toLowerCase();
-
-    return (
-      credential.credentialId === payload?.id ||
-      credential.id === payload?.id ||
-      hashMatches
-    );
-  });
-}
-
-function getCheck(checks: VerificationCheck[], label: string) {
-  return checks.find((check) => check.label === label);
-}
 
 function VerificationSection({
   title,
@@ -184,6 +100,16 @@ export function VerifierDashboard() {
 
   useEffect(() => {
     void loadCredentials();
+
+    const handleAuthChanged = () => {
+      void loadCredentials();
+    };
+
+    window.addEventListener("wallet-auth-changed", handleAuthChanged);
+
+    return () => {
+      window.removeEventListener("wallet-auth-changed", handleAuthChanged);
+    };
   }, []);
 
   const selectedCredential = useMemo(
@@ -239,129 +165,11 @@ export function VerifierDashboard() {
     window.setTimeout(() => setChallengeCopied(false), 1500);
   }
 
-  async function runOnChainChecks(
-    offChainChecks: VerificationCheck[],
-    payload: StudentCredentialPayload | null,
-    credentialHash: string | null
-  ) {
-    const integrityCheck = getCheck(
-      offChainChecks,
-      "Presented credential hash matches stored hash"
-    );
-
-    if (!wallet.hasMetaMask) {
-      return skippedOnChainChecks("MetaMask is required for local on-chain reads.");
-    }
-
-    if (!wallet.isLocalHardhat) {
-      return skippedOnChainChecks(
-        "Switch MetaMask to local Hardhat chain 31337 before running on-chain checks."
-      );
-    }
-
-    if (!integrityCheck?.passed) {
-      return skippedOnChainChecks(
-        "Skipped because the presented credential failed the local integrity check."
-      );
-    }
-
-    if (!payload || !credentialHash) {
-      return skippedOnChainChecks(
-        "Skipped because the credential payload or hash is unavailable."
-      );
-    }
-
-    try {
-      const issuerAddress = getAddress(payload.issuer.walletAddress);
-      const schemaHash = hashCredentialSchema({
-        name: payload.schema.name,
-        version: payload.schema.version
-      });
-
-      const [
-        issuerTrusted,
-        schemaValid,
-        schemaName,
-        credentialRegistered,
-        credentialRevoked,
-        credentialIssuer
-      ] = await Promise.all([
-        isTrustedIssuerOnChain({ issuerAddress }),
-        isSchemaValidOnChain({ schemaHash }),
-        getSchemaNameOnChain({ schemaHash }),
-        isCredentialRegisteredOnChain({ credentialHash }),
-        isCredentialRevokedOnChain({ credentialHash }),
-        getCredentialIssuerOnChain({ credentialHash })
-      ]);
-
-      const normalizedCredentialIssuer = getAddress(credentialIssuer);
-      const issuerMatches =
-        credentialRegistered && normalizedCredentialIssuer === issuerAddress;
-
-      return [
-        {
-          label: "Issuer trusted on-chain",
-          passed: issuerTrusted,
-          detail: `${payload.issuer.name} (${issuerAddress}) is ${
-            issuerTrusted ? "trusted" : "not trusted"
-          } on-chain`
-        },
-        {
-          label: "Schema valid on-chain",
-          passed: schemaValid,
-          detail: schemaValid
-            ? `${schemaName || payload.schema.name} is registered for hash ${schemaHash}`
-            : `Schema hash ${schemaHash} is not registered`
-        },
-        {
-          label: "Credential hash registered on-chain",
-          passed: credentialRegistered,
-          detail: credentialRegistered
-            ? `Credential hash ${credentialHash} is registered`
-            : `Credential hash ${credentialHash} is not registered`
-        },
-        {
-          label: "Credential not revoked on-chain",
-          passed: !credentialRevoked,
-          detail: credentialRevoked
-            ? "Credential hash is revoked on-chain"
-            : "Credential hash is not revoked on-chain"
-        },
-        {
-          label: "Credential issuer matches on-chain",
-          passed: issuerMatches,
-          detail: `On-chain issuer ${normalizedCredentialIssuer}; credential issuer ${issuerAddress}`
-        }
-      ];
-    } catch (error) {
-      return skippedOnChainChecks(
-        error instanceof Error ? error.message : "On-chain verification failed."
-      );
-    }
-  }
-
   async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setVerifying(true);
     setMessage(null);
     setResult(null);
-
-    const pastedCredential = parseCredentialInput(credentialJson);
-    const selectedPayload = isStudentCredentialPayload(
-      selectedCredential?.credentialJson
-    )
-      ? selectedCredential.credentialJson
-      : null;
-    const credentialPayload = pastedCredential ?? selectedPayload;
-    const presentedCredentialHash =
-      safeHashCredential(credentialPayload) ?? selectedCredential?.credentialHash ?? null;
-    const matchingCredential = findMatchingCredential(
-      credentials,
-      selectedCredential,
-      credentialPayload,
-      presentedCredentialHash
-    );
-    const proof = parsePresentationProof(presentationProofJson);
 
     const response = await fetch("/api/verify", {
       method: "POST",
@@ -377,6 +185,8 @@ export function VerifierDashboard() {
     const data = (await response.json()) as VerificationResult & {
       error?: string;
       checks?: VerificationCheck[];
+      offChainChecks?: VerificationCheck[];
+      onChainChecks?: VerificationCheck[];
       presentationChecks?: VerificationCheck[];
     };
 
@@ -386,58 +196,11 @@ export function VerifierDashboard() {
       return;
     }
 
-    const offChainChecks = data.checks ?? [];
-    let presentationChecks = data.presentationChecks ?? [];
-    const onChainChecks = await runOnChainChecks(
-      offChainChecks,
-      credentialPayload,
-      presentedCredentialHash ?? matchingCredential?.credentialHash ?? null
-    );
-    let approved =
-      offChainChecks.every((check) => check.passed) &&
-      onChainChecks.every((check) => check.passed) &&
-      presentationChecks.every((check) => check.passed);
-
-    if (approved && proof) {
-      const consumeResponse = await fetch(
-        `/api/verification-requests/${proof.requestId}/use`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            credentialId:
-              matchingCredential?.credentialId ?? credentialPayload?.id ?? proof.credentialId,
-            credentialHash:
-              presentedCredentialHash ??
-              matchingCredential?.credentialHash ??
-              proof.credentialHash,
-            presentationProofJson
-          })
-        }
-      );
-      const consumeData = (await consumeResponse.json()) as {
-        error?: string;
-      };
-
-      presentationChecks = [
-        ...presentationChecks,
-        {
-          label: "Verification request marked used",
-          passed: consumeResponse.ok,
-          detail: consumeResponse.ok
-            ? "Challenge was consumed after successful verification."
-            : consumeData.error ?? "Challenge could not be consumed."
-        }
-      ];
-
-      approved = approved && consumeResponse.ok;
-    }
-
     setResult({
-      result: approved ? "APPROVED" : "REJECTED",
-      offChainChecks,
-      onChainChecks,
-      presentationChecks
+      result: data.result,
+      offChainChecks: data.offChainChecks ?? data.checks ?? [],
+      onChainChecks: data.onChainChecks ?? [],
+      presentationChecks: data.presentationChecks ?? []
     });
     setVerifying(false);
   }

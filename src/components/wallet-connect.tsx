@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw, Wallet } from "lucide-react";
+import { LogIn, LogOut, RefreshCw, Wallet } from "lucide-react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle
 } from "@/components/ui/card";
+import { useWalletAuth } from "@/hooks/useWalletAuth";
 import type { WalletConnection } from "@/hooks/useWallet";
 import { LOCAL_HARDHAT_CHAIN_ID } from "@/lib/blockchain/provider";
 
@@ -24,6 +25,11 @@ type WalletConnectProps = {
 };
 
 export function WalletConnect({ wallet }: WalletConnectProps) {
+  const auth = useWalletAuth(wallet);
+  const walletMismatch =
+    Boolean(wallet.address && auth.user?.walletAddress) &&
+    wallet.address !== auth.user?.walletAddress;
+
   return (
     <Card>
       <CardHeader className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -56,6 +62,26 @@ export function WalletConnect({ wallet }: WalletConnectProps) {
             <RefreshCw />
             Refresh
           </Button>
+          {auth.isSignedIn ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void auth.signOut()}
+            >
+              <LogOut />
+              Sign out
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void auth.signIn()}
+              disabled={auth.signingIn || !wallet.hasMetaMask}
+            >
+              <LogIn />
+              {auth.signingIn ? "Signing..." : "Sign in"}
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -65,6 +91,9 @@ export function WalletConnect({ wallet }: WalletConnectProps) {
           </Badge>
           <Badge variant={wallet.isLocalHardhat ? "success" : "warning"}>
             Chain {wallet.chainId ?? "unknown"}
+          </Badge>
+          <Badge variant={auth.isSignedIn ? "success" : "neutral"}>
+            {auth.user ? `${auth.user.role} session` : "Not signed in"}
           </Badge>
         </div>
 
@@ -84,6 +113,23 @@ export function WalletConnect({ wallet }: WalletConnectProps) {
               Switch MetaMask to the local Hardhat network with chain id{" "}
               {LOCAL_HARDHAT_CHAIN_ID}.
             </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {walletMismatch ? (
+          <Alert variant="warning">
+            <AlertTitle>Wallet session mismatch</AlertTitle>
+            <AlertDescription>
+              Connected wallet {wallet.address} differs from the signed-in session{" "}
+              {auth.user?.walletAddress}. Sign out and sign in with the active wallet.
+            </AlertDescription>
+          </Alert>
+        ) : null}
+
+        {auth.error ? (
+          <Alert variant="destructive">
+            <AlertTitle>Sign-in error</AlertTitle>
+            <AlertDescription>{auth.error}</AlertDescription>
           </Alert>
         ) : null}
 

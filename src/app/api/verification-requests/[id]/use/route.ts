@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { writeAuditLog } from "@/lib/audit/log";
+import { authErrorResponse, requireRole } from "@/lib/auth/session";
 import { hashCredentialPayload } from "@/lib/credential/hash";
 import { isStudentCredentialPayload } from "@/lib/credential/vc";
 import { prisma } from "@/lib/db/prisma";
@@ -16,6 +18,7 @@ type RouteContext = {
 
 export async function POST(request: Request, context: RouteContext) {
   try {
+    const user = await requireRole(request, ["VERIFIER"]);
     const { id } = await context.params;
     const data = useVerificationRequestSchema.parse(await request.json());
     const proof = parsePresentationProof(data.presentationProofJson);
@@ -111,12 +114,28 @@ export async function POST(request: Request, context: RouteContext) {
 
       return { presentationProof };
     });
+    await writeAuditLog({
+      actor: user,
+      action: "verification.consume",
+      targetType: "VerificationRequest",
+      targetId: id,
+      metadata: {
+        credentialId: data.credentialId,
+        credentialHash: data.credentialHash
+      }
+    });
 
     return NextResponse.json({
       ok: true,
       presentationProof: result.presentationProof
     });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+
+    if (authResponse) {
+      return authResponse;
+    }
+
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.issues[0]?.message }, { status: 400 });
     }

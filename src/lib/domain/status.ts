@@ -1,4 +1,10 @@
-export const CREDENTIAL_STATUSES = ["ISSUED", "REVOKED", "EXPIRED"] as const;
+export const CREDENTIAL_STATUSES = [
+  "PENDING_ONCHAIN",
+  "ISSUED",
+  "REVOKED",
+  "EXPIRED",
+  "FAILED"
+] as const;
 export type CredentialStatus = (typeof CREDENTIAL_STATUSES)[number];
 
 export const VERIFICATION_RESULTS = ["APPROVED", "REJECTED", "PENDING"] as const;

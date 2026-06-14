@@ -15,6 +15,7 @@ model Issuer {
   trusted       Boolean      @default(false)
   students      Student[]
   credentials   Credential[]
+  users         User[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 }
@@ -29,10 +30,32 @@ model Student {
   walletAddress String       @unique
   active        Boolean      @default(true)
   credentials   Credential[]
+  users         User[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
 
   @@index([universityId])
+}
+
+model User {
+  id             String     @id @default(cuid())
+  walletAddress  String     @unique
+  role           String
+  issuerId       String?
+  issuer         Issuer?    @relation(fields: [issuerId], references: [id], onDelete: SetNull)
+  studentId      String?
+  student        Student?   @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  verifierName   String?
+  nonce          String?
+  nonceExpiresAt DateTime?
+  lastLoginAt    DateTime?
+  auditLogs      AuditLog[]
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([role])
+  @@index([issuerId])
+  @@index([studentId])
 }
 
 model Credential {
@@ -46,9 +69,14 @@ model Credential {
   schemaName     String       @default("StudentCredential")
   credentialJson String
   credentialHash String?
-  status         String       @default("ISSUED")
+  status         String       @default("PENDING_ONCHAIN")
   issuedAt       DateTime
   expiresAt      DateTime
+  registeredAt   DateTime?
+  registeredTxHash String?
+  revokedAt      DateTime?
+  revocationTxHash String?
+  revocationReason String?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
@@ -90,4 +118,23 @@ model PresentationProof {
 
   @@index([credentialId])
   @@index([requestId])
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  actorUserId   String?
+  actorUser     User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorWallet   String?
+  actorRole     String?
+  action        String
+  targetType    String
+  targetId      String?
+  txHash        String?
+  metadata      String   @default("{}")
+  createdAt     DateTime @default(now())
+
+  @@index([actorUserId])
+  @@index([action])
+  @@index([targetType, targetId])
+  @@index([createdAt])
 }

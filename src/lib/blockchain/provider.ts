@@ -10,7 +10,9 @@ import {
 import registryAbi from "./StudentVerificationRegistry.abi.json";
 import deployment from "./deployment.json";
 
-export const LOCAL_HARDHAT_CHAIN_ID = 31337;
+export const LOCAL_HARDHAT_CHAIN_ID = Number(
+  process.env.NEXT_PUBLIC_CHAIN_ID ?? 31337
+);
 
 type EthereumProvider = Eip1193Provider & {
   on?: (event: string, listener: (...args: unknown[]) => void) => void;
@@ -54,8 +56,10 @@ export function getEthereumProvider() {
 
 export function getRegistryDeployment() {
   const registryDeployment = deployment as RegistryDeployment;
+  const configuredAddress =
+    process.env.NEXT_PUBLIC_REGISTRY_ADDRESS || registryDeployment.address;
 
-  if (!registryDeployment.address) {
+  if (!configuredAddress) {
     throw new Error(
       "Contract deployment is missing. Run npm run hardhat:deploy:local first."
     );
@@ -63,7 +67,8 @@ export function getRegistryDeployment() {
 
   return {
     ...registryDeployment,
-    address: getAddress(registryDeployment.address)
+    chainId: Number(process.env.NEXT_PUBLIC_CHAIN_ID ?? registryDeployment.chainId),
+    address: getAddress(configuredAddress)
   };
 }
 

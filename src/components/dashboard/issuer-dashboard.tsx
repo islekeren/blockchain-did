@@ -58,6 +58,11 @@ import {
   registerCredentialHashOnChain,
   revokeCredentialOnChain
 } from "@/lib/blockchain/registryClient";
+import { requestSigner } from "@/lib/blockchain/provider";
+import {
+  buildIssuerCredentialProof,
+  createCredentialProofMessage
+} from "@/lib/credential/proof";
 import type { CredentialRecord, IssuerRecord, StudentRecord } from "@/lib/types";
 
 type IssuersResponse = {
@@ -161,6 +166,16 @@ export function IssuerDashboard() {
 
   useEffect(() => {
     void loadData();
+
+    const handleAuthChanged = () => {
+      void loadData();
+    };
+
+    window.addEventListener("wallet-auth-changed", handleAuthChanged);
+
+    return () => {
+      window.removeEventListener("wallet-auth-changed", handleAuthChanged);
+    };
   }, []);
 
   const activeStudents = useMemo(
@@ -330,14 +345,75 @@ export function IssuerDashboard() {
     setCredentialTxState(credential.id, { status: "pending" });
 
     try {
+      let credentialForRegistration = credential;
+
+      if (!credential.credentialJson.proof) {
+        const signer = await requestSigner();
+        const signerAddress = await signer.getAddress();
+        const issuerAddress = credential.issuer?.walletAddress;
+
+        if (!issuerAddress || signerAddress !== issuerAddress) {
+          throw new Error(
+            "Connected wallet must match the credential issuer before signing the VC proof."
+          );
+        }
+
+        const signature = await signer.signMessage(
+          createCredentialProofMessage({
+            credential: credential.credentialJson,
+            credentialHash: credential.credentialHash
+          })
+        );
+        const issuerProof = buildIssuerCredentialProof({
+          credential: credential.credentialJson,
+          credentialHash: credential.credentialHash,
+          signature
+        });
+        const proofResponse = await fetch(`/api/credentials/${credential.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ issuerProof })
+        });
+        const proofData = (await proofResponse.json()) as {
+          credential?: CredentialRecord;
+          error?: string;
+        };
+
+        if (!proofResponse.ok || !proofData.credential) {
+          throw new Error(proofData.error ?? "Issuer proof could not be saved.");
+        }
+
+        credentialForRegistration = proofData.credential;
+      }
+
       const result = await registerCredentialHashOnChain({
         credentialHash: credential.credentialHash
       });
+      const statusResponse = await fetch(`/api/credentials/${credential.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "ISSUED",
+          registeredTxHash: result.txHash
+        })
+      });
+      const statusData = (await statusResponse.json()) as {
+        error?: string;
+      };
+
+      if (!statusResponse.ok) {
+        throw new Error(
+          statusData.error ??
+            "Credential was registered on-chain, but DB status update failed."
+        );
+      }
+
       setCredentialTxState(credential.id, {
         status: "success",
         txHash: result.txHash
       });
-      await loadOnChainCredential(credential);
+      await loadOnChainCredential(credentialForRegistration);
+      await loadData();
       await wallet.refresh();
     } catch (error) {
       setCredentialTxState(credential.id, {
@@ -369,7 +445,11 @@ export function IssuerDashboard() {
       const response = await fetch(`/api/credentials/${credential.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "REVOKED" })
+        body: JSON.stringify({
+          status: "REVOKED",
+          revocationTxHash: result.txHash,
+          revocationReason: "Revoked by issuer from dashboard"
+        })
       });
 
       if (!response.ok) {

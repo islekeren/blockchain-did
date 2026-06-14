@@ -2,6 +2,8 @@ type CredentialRecord = {
   credentialJson: string;
   issuedAt: Date;
   expiresAt: Date;
+  registeredAt?: Date | null;
+  revokedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   [key: string]: unknown;
@@ -21,6 +23,8 @@ export function serializeCredential(record: CredentialRecord) {
     credentialJson: safeJsonParse(record.credentialJson),
     issuedAt: record.issuedAt.toISOString(),
     expiresAt: record.expiresAt.toISOString(),
+    registeredAt: record.registeredAt?.toISOString() ?? null,
+    revokedAt: record.revokedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString()
   };

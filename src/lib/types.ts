@@ -1,6 +1,22 @@
 import type { StudentCredentialPayload } from "@/lib/credential/vc";
 import type { CredentialStatus } from "@/lib/domain/status";
 
+export type UserRole = "ADMIN" | "ISSUER" | "STUDENT" | "VERIFIER";
+
+export type UserRecord = {
+  id: string;
+  walletAddress: string;
+  role: UserRole;
+  issuerId: string | null;
+  studentId: string | null;
+  verifierName: string | null;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  issuer?: IssuerRecord | null;
+  student?: StudentRecord | null;
+};
+
 export type IssuerRecord = {
   id: string;
   name: string;
@@ -43,6 +59,11 @@ export type CredentialRecord = {
   status: CredentialStatus;
   issuedAt: string;
   expiresAt: string;
+  registeredAt: string | null;
+  registeredTxHash: string | null;
+  revokedAt: string | null;
+  revocationTxHash: string | null;
+  revocationReason: string | null;
   createdAt: string;
   updatedAt: string;
   student?: StudentRecord;
@@ -57,5 +78,22 @@ export type VerificationCheck = {
 
 export type VerificationResult = {
   result: "APPROVED" | "REJECTED";
-  checks: VerificationCheck[];
+  checks?: VerificationCheck[];
+  offChainChecks?: VerificationCheck[];
+  onChainChecks?: VerificationCheck[];
+  presentationChecks?: VerificationCheck[];
+  verification?: unknown;
+};
+
+export type AuditLogRecord = {
+  id: string;
+  actorUserId: string | null;
+  actorWallet: string | null;
+  actorRole: UserRole | null;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  txHash: string | null;
+  metadata: unknown;
+  createdAt: string;
 };

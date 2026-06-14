@@ -118,6 +118,16 @@ export function WalletDashboard() {
 
   useEffect(() => {
     void loadStudents();
+
+    const handleAuthChanged = () => {
+      void loadStudents();
+    };
+
+    window.addEventListener("wallet-auth-changed", handleAuthChanged);
+
+    return () => {
+      window.removeEventListener("wallet-auth-changed", handleAuthChanged);
+    };
   }, []);
 
   useEffect(() => {

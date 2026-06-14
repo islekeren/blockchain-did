@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { writeAuditLog } from "@/lib/audit/log";
+import { authErrorResponse, requireRole } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import { createVerificationChallengeSchema } from "@/lib/validation/schemas";
 
@@ -16,7 +18,9 @@ function createNonce() {
 
 export async function POST(request: Request) {
   try {
+    const user = await requireRole(request, ["VERIFIER"]);
     const data = createVerificationChallengeSchema.parse(await request.json());
+    const verifierName = user.verifierName ?? data.verifierName;
     const requestId = crypto.randomUUID();
     const nonce = createNonce();
     const expiresAt = tenMinutesFromNow();
@@ -24,7 +28,7 @@ export async function POST(request: Request) {
     const verificationRequest = await prisma.verificationRequest.create({
       data: {
         id: requestId,
-        verifierName: data.verifierName,
+        verifierName,
         nonce,
         result: "PENDING",
         reasons: "[]",
@@ -47,6 +51,15 @@ export async function POST(request: Request) {
         challengeMessage: JSON.stringify(challenge, null, 2)
       }
     });
+    await writeAuditLog({
+      actor: user,
+      action: "verification.challengeCreate",
+      targetType: "VerificationRequest",
+      targetId: verificationRequest.id,
+      metadata: {
+        verifierName
+      }
+    });
 
     return NextResponse.json({
       challenge: {
@@ -55,6 +68,12 @@ export async function POST(request: Request) {
       }
     });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+
+    if (authResponse) {
+      return authResponse;
+    }
+
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.issues[0]?.message }, { status: 400 });
     }

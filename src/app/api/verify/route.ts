@@ -1,7 +1,20 @@
+import { getAddress } from "ethers";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
+import { writeAuditLog } from "@/lib/audit/log";
+import { authErrorResponse, requireRole } from "@/lib/auth/session";
+import {
+  getCredentialIssuerOnChainServer,
+  getSchemaNameOnChainServer,
+  isCredentialRegisteredOnChainServer,
+  isCredentialRevokedOnChainServer,
+  isSchemaValidOnChainServer,
+  isTrustedIssuerOnChainServer
+} from "@/lib/blockchain/serverRegistry";
 import { hashCredentialPayload } from "@/lib/credential/hash";
+import { verifyIssuerCredentialProof } from "@/lib/credential/proof";
+import { hashCredentialSchema } from "@/lib/credential/schema";
 import {
   isStudentCredentialPayload,
   type StudentCredentialPayload
@@ -18,6 +31,14 @@ type VerificationCheck = {
   passed: boolean;
   detail: string;
 };
+
+const onChainCheckLabels = [
+  "Issuer trusted on-chain",
+  "Schema valid on-chain",
+  "Credential hash registered on-chain",
+  "Credential not revoked on-chain",
+  "Credential issuer matches on-chain"
+];
 
 function parseCredentialInput(value?: string): StudentCredentialPayload | null {
   if (!value) {
@@ -45,9 +66,107 @@ function safeHashCredential(payload: StudentCredentialPayload | null) {
   }
 }
 
+function skippedOnChainChecks(reason: string): VerificationCheck[] {
+  return onChainCheckLabels.map((label) => ({
+    label,
+    passed: false,
+    detail: reason
+  }));
+}
+
+async function runOnChainChecks(
+  offChainChecks: VerificationCheck[],
+  payload: StudentCredentialPayload | null,
+  credentialHash: string | null
+) {
+  const integrityCheck = offChainChecks.find(
+    (check) => check.label === "Presented credential hash matches stored hash"
+  );
+
+  if (!integrityCheck?.passed) {
+    return skippedOnChainChecks(
+      "Skipped because the presented credential failed the local integrity check."
+    );
+  }
+
+  if (!payload || !credentialHash) {
+    return skippedOnChainChecks(
+      "Skipped because the credential payload or hash is unavailable."
+    );
+  }
+
+  try {
+    const issuerAddress = getAddress(payload.issuer.walletAddress);
+    const schemaHash = hashCredentialSchema({
+      name: payload.schema.name,
+      version: payload.schema.version
+    });
+    const [
+      issuerTrusted,
+      schemaValid,
+      schemaName,
+      credentialRegistered,
+      credentialRevoked,
+      credentialIssuer
+    ] = await Promise.all([
+      isTrustedIssuerOnChainServer(issuerAddress),
+      isSchemaValidOnChainServer(schemaHash),
+      getSchemaNameOnChainServer(schemaHash),
+      isCredentialRegisteredOnChainServer(credentialHash),
+      isCredentialRevokedOnChainServer(credentialHash),
+      getCredentialIssuerOnChainServer(credentialHash)
+    ]);
+    const normalizedCredentialIssuer = getAddress(credentialIssuer);
+    const issuerMatches =
+      credentialRegistered && normalizedCredentialIssuer === issuerAddress;
+
+    return [
+      {
+        label: "Issuer trusted on-chain",
+        passed: issuerTrusted,
+        detail: `${payload.issuer.name} (${issuerAddress}) is ${
+          issuerTrusted ? "trusted" : "not trusted"
+        } on-chain`
+      },
+      {
+        label: "Schema valid on-chain",
+        passed: schemaValid,
+        detail: schemaValid
+          ? `${schemaName || payload.schema.name} is registered for hash ${schemaHash}`
+          : `Schema hash ${schemaHash} is not registered`
+      },
+      {
+        label: "Credential hash registered on-chain",
+        passed: credentialRegistered,
+        detail: credentialRegistered
+          ? `Credential hash ${credentialHash} is registered`
+          : `Credential hash ${credentialHash} is not registered`
+      },
+      {
+        label: "Credential not revoked on-chain",
+        passed: !credentialRevoked,
+        detail: credentialRevoked
+          ? "Credential hash is revoked on-chain"
+          : "Credential hash is not revoked on-chain"
+      },
+      {
+        label: "Credential issuer matches on-chain",
+        passed: issuerMatches,
+        detail: `On-chain issuer ${normalizedCredentialIssuer}; credential issuer ${issuerAddress}`
+      }
+    ];
+  } catch (error) {
+    return skippedOnChainChecks(
+      error instanceof Error ? error.message : "On-chain verification failed."
+    );
+  }
+}
+
 export async function POST(request: Request) {
   try {
+    const user = await requireRole(request, ["VERIFIER"]);
     const data = verifyCredentialSchema.parse(await request.json());
+    const verifierName = user.verifierName ?? data.verifierName;
     const pastedCredential = parseCredentialInput(data.credentialJson);
     const hasPastedCredentialJson = Boolean(data.credentialJson?.trim());
     const lookupId = pastedCredential?.id ?? data.credentialId;
@@ -74,7 +193,6 @@ export async function POST(request: Request) {
           }
         })
       : null;
-
     const issuer = credential?.issuer ?? issuerFromPayload;
     const storedCredentialPayload = credential
       ? parseCredentialInput(credential.credentialJson)
@@ -93,8 +211,15 @@ export async function POST(request: Request) {
       ? new Date(credentialPayload.expirationDate)
       : null;
     const now = new Date();
+    const issuerProofResult =
+      credentialPayload && presentedCredentialHash
+        ? verifyIssuerCredentialProof({
+            credential: credentialPayload,
+            credentialHash: presentedCredentialHash
+          })
+        : null;
 
-    const checks: VerificationCheck[] = [
+    const offChainChecks: VerificationCheck[] = [
       {
         label: "Credential exists",
         passed: Boolean(credential),
@@ -150,9 +275,15 @@ export async function POST(request: Request) {
         detail: issuer
           ? `${issuer.name} is ${issuer.trusted ? "trusted" : "untrusted"}`
           : "Issuer was not found in the local registry"
+      },
+      {
+        label: "Issuer proof recovers issuer wallet",
+        passed: Boolean(issuerProofResult?.valid),
+        detail:
+          issuerProofResult?.reason ??
+          "Issuer proof cannot be checked without credential payload and hash."
       }
     ];
-
     const presentation = buildPresentationProofChecks({
       proofJson: data.presentationProofJson,
       credentialPayload,
@@ -160,46 +291,118 @@ export async function POST(request: Request) {
       request: verificationRequest,
       now
     });
-    const offChainPassed = checks.every((check) => check.passed);
+    const onChainChecks = await runOnChainChecks(
+      offChainChecks,
+      credentialPayload,
+      presentedCredentialHash
+    );
+    const offChainPassed = offChainChecks.every((check) => check.passed);
     const presentationPassed = presentation.checks.every((check) => check.passed);
-    const preliminaryApproved = offChainPassed && presentationPassed;
+    const onChainPassed = onChainChecks.every((check) => check.passed);
+    const approved = offChainPassed && presentationPassed && onChainPassed;
     const reasons = JSON.stringify({
-      offChainChecks: checks,
+      offChainChecks,
+      onChainChecks,
       presentationChecks: presentation.checks
     });
 
-    const verification = verificationRequest
-      ? verificationRequest.used
-        ? verificationRequest
-        : await prisma.verificationRequest.update({
-          where: { id: verificationRequest.id },
+    let verification = verificationRequest;
+
+    if (approved && verificationRequest && presentationProof && credential) {
+      await prisma.$transaction(async (tx) => {
+        const updated = await tx.verificationRequest.updateMany({
+          where: {
+            id: verificationRequest.id,
+            used: false
+          },
           data: {
-            credentialId: credential?.credentialId ?? lookupId ?? null,
-            verifierName: verificationRequest.verifierName,
-            result: preliminaryApproved ? "PENDING" : "REJECTED",
-            reasons
-          }
-        })
-      : await prisma.verificationRequest.create({
-          data: {
-            credentialId: credential?.credentialId ?? lookupId ?? null,
-            verifierName: data.verifierName,
-            result: "REJECTED",
+            used: true,
+            credentialId: credential.credentialId,
+            result: "APPROVED",
             reasons
           }
         });
 
+        if (updated.count !== 1) {
+          throw new Error("Verification request has already been used.");
+        }
+
+        await tx.presentationProof.create({
+          data: {
+            credentialId: presentationProof.credentialId,
+            credentialHash: presentationProof.credentialHash,
+            studentWalletAddress: presentationProof.studentWalletAddress,
+            requestId: verificationRequest.id,
+            nonce: presentationProof.nonce,
+            verifierName: presentationProof.verifierName,
+            message: presentationProof.message,
+            signature: presentationProof.signature
+          }
+        });
+      });
+      verification = await prisma.verificationRequest.findUnique({
+        where: { id: verificationRequest.id }
+      });
+    } else if (verificationRequest && !verificationRequest.used) {
+      verification = await prisma.verificationRequest.update({
+        where: { id: verificationRequest.id },
+        data: {
+          credentialId: credential?.credentialId ?? lookupId ?? null,
+          verifierName: verificationRequest.verifierName,
+          result: "REJECTED",
+          reasons
+        }
+      });
+    } else if (!verificationRequest) {
+      verification = await prisma.verificationRequest.create({
+        data: {
+          credentialId: credential?.credentialId ?? lookupId ?? null,
+          verifierName,
+          result: "REJECTED",
+          reasons
+        }
+      });
+    }
+
+    await writeAuditLog({
+      actor: user,
+      action: approved ? "verification.approve" : "verification.reject",
+      targetType: "VerificationRequest",
+      targetId: verification?.id ?? null,
+      metadata: {
+        credentialId: credential?.credentialId ?? lookupId ?? null,
+        credentialHash: presentedCredentialHash,
+        offChainPassed,
+        onChainPassed,
+        presentationPassed
+      }
+    });
+
     return NextResponse.json({
-      result: preliminaryApproved ? "APPROVED" : "REJECTED",
-      checks,
+      result: approved ? "APPROVED" : "REJECTED",
+      checks: offChainChecks,
+      offChainChecks,
+      onChainChecks,
       presentationChecks: presentation.checks,
       verification
     });
   } catch (error) {
+    const authResponse = authErrorResponse(error);
+
+    if (authResponse) {
+      return authResponse;
+    }
+
     if (error instanceof ZodError) {
       return NextResponse.json({ error: error.issues[0]?.message }, { status: 400 });
     }
 
-    return NextResponse.json({ error: "Unable to verify credential" }, { status: 400 });
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : "Unable to verify credential"
+      },
+      { status: 400 }
+    );
   }
 }

@@ -48,10 +48,14 @@ import {
   STUDENT_CREDENTIAL_SCHEMA,
   STUDENT_CREDENTIAL_SCHEMA_HASH
 } from "@/lib/credential/schema";
-import type { IssuerRecord } from "@/lib/types";
+import type { AuditLogRecord, IssuerRecord } from "@/lib/types";
 
 type IssuerResponse = {
   issuers: IssuerRecord[];
+};
+
+type AuditResponse = {
+  logs: AuditLogRecord[];
 };
 
 type TxState = {
@@ -112,6 +116,20 @@ function TxFeedback({ state }: { state?: TxState }) {
   return <p className="max-w-64 text-xs text-destructive">{state.error}</p>;
 }
 
+async function writeClientAudit(input: {
+  action: string;
+  targetType: string;
+  targetId?: string;
+  txHash?: string;
+  metadata?: unknown;
+}) {
+  await fetch("/api/audit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
 export function AdminDashboard() {
   const wallet = useWallet();
   const [issuers, setIssuers] = useState<IssuerRecord[]>([]);
@@ -128,6 +146,7 @@ export function AdminDashboard() {
     loading: false
   });
   const [schemaTx, setSchemaTx] = useState<TxState>(idleTx);
+  const [auditLogs, setAuditLogs] = useState<AuditLogRecord[]>([]);
 
   async function loadIssuers() {
     setLoading(true);
@@ -137,8 +156,26 @@ export function AdminDashboard() {
     setLoading(false);
   }
 
+  async function loadAuditLogs() {
+    const response = await fetch("/api/audit", { cache: "no-store" });
+    const data = (await response.json()) as AuditResponse;
+    setAuditLogs(data.logs ?? []);
+  }
+
   useEffect(() => {
     void loadIssuers();
+    void loadAuditLogs();
+
+    const handleAuthChanged = () => {
+      void loadIssuers();
+      void loadAuditLogs();
+    };
+
+    window.addEventListener("wallet-auth-changed", handleAuthChanged);
+
+    return () => {
+      window.removeEventListener("wallet-auth-changed", handleAuthChanged);
+    };
   }, []);
 
   const trustedCount = useMemo(
@@ -274,6 +311,15 @@ export function AdminDashboard() {
         status: "success",
         txHash: result.txHash
       });
+      await writeClientAudit({
+        action: "issuer.registerOnChain",
+        targetType: "Issuer",
+        targetId: issuer.id,
+        txHash: result.txHash,
+        metadata: {
+          walletAddress: issuer.walletAddress
+        }
+      });
       await loadOnChainIssuer(issuer);
       await wallet.refresh();
     } catch (error) {
@@ -295,6 +341,15 @@ export function AdminDashboard() {
         status: "success",
         txHash: result.txHash
       });
+      await writeClientAudit({
+        action: "issuer.removeOnChain",
+        targetType: "Issuer",
+        targetId: issuer.id,
+        txHash: result.txHash,
+        metadata: {
+          walletAddress: issuer.walletAddress
+        }
+      });
       await loadOnChainIssuer(issuer);
       await wallet.refresh();
     } catch (error) {
@@ -314,6 +369,13 @@ export function AdminDashboard() {
         schemaName: STUDENT_CREDENTIAL_SCHEMA.name
       });
       setSchemaTx({ status: "success", txHash: result.txHash });
+      await writeClientAudit({
+        action: "schema.registerOnChain",
+        targetType: "CredentialSchema",
+        targetId: STUDENT_CREDENTIAL_SCHEMA_HASH,
+        txHash: result.txHash,
+        metadata: STUDENT_CREDENTIAL_SCHEMA
+      });
       await loadSchemaStatus();
       await wallet.refresh();
     } catch (error) {
@@ -649,6 +711,69 @@ export function AdminDashboard() {
             </Alert>
           ) : null}
           <TxFeedback state={schemaTx} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <CardTitle>Audit Trail</CardTitle>
+            <CardDescription>
+              Recent authenticated actions, blockchain transaction callbacks, and verification decisions.
+            </CardDescription>
+          </div>
+          <Button variant="outline" onClick={() => void loadAuditLogs()}>
+            <RefreshCw />
+            Refresh Logs
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Time</TableHead>
+                <TableHead>Actor</TableHead>
+                <TableHead>Action</TableHead>
+                <TableHead>Target</TableHead>
+                <TableHead>Tx</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {auditLogs.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={5}>No audit logs visible for this session.</TableCell>
+                </TableRow>
+              ) : (
+                auditLogs.map((log) => (
+                  <TableRow key={log.id}>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(log.createdAt).toLocaleString()}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <span>{log.actorRole ?? "System"}</span>
+                        <span className="max-w-44 truncate font-mono text-xs text-muted-foreground">
+                          {log.actorWallet ?? "n/a"}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{log.action}</TableCell>
+                    <TableCell className="text-xs">
+                      {log.targetType}
+                      {log.targetId ? (
+                        <span className="ml-1 font-mono text-muted-foreground">
+                          {shortHash(log.targetId)}
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {log.txHash ? shortHash(log.txHash) : "n/a"}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
     </div>

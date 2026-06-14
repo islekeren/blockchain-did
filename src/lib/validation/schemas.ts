@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { CREDENTIAL_STATUSES } from "@/lib/domain/status";
+import { USER_ROLES } from "@/lib/auth/roles";
 
 export const walletAddressSchema = z
   .string()
@@ -43,7 +44,21 @@ export const issueCredentialSchema = z.object({
 });
 
 export const updateCredentialSchema = z.object({
-  status: z.enum(CREDENTIAL_STATUSES)
+  status: z.enum(CREDENTIAL_STATUSES).optional(),
+  registeredTxHash: z.string().trim().regex(/^0x[a-fA-F0-9]+$/).optional(),
+  revokedAt: z.string().datetime().optional(),
+  revocationTxHash: z.string().trim().regex(/^0x[a-fA-F0-9]+$/).optional(),
+  revocationReason: z.string().trim().max(500).optional(),
+  issuerProof: z
+    .object({
+      type: z.string().trim().min(1),
+      created: z.string().datetime(),
+      verificationMethod: didEthrSchema,
+      proofPurpose: z.string().trim().min(1),
+      message: z.string().trim().min(1),
+      signature: z.string().trim().regex(/^0x[a-fA-F0-9]+$/)
+    })
+    .optional()
 });
 
 export const verifyCredentialSchema = z
@@ -65,4 +80,30 @@ export const useVerificationRequestSchema = z.object({
   credentialId: z.string().trim().min(1),
   credentialHash: z.string().trim().min(1),
   presentationProofJson: z.string().trim().min(1)
+});
+
+export const walletAuthNonceSchema = z.object({
+  walletAddress: walletAddressSchema
+});
+
+export const walletAuthVerifySchema = z.object({
+  walletAddress: walletAddressSchema,
+  message: z.string().trim().min(1),
+  signature: z.string().trim().regex(/^0x[a-fA-F0-9]+$/)
+});
+
+export const auditLogSchema = z.object({
+  action: z.string().trim().min(2).max(80),
+  targetType: z.string().trim().min(2).max(80),
+  targetId: z.string().trim().max(120).optional(),
+  txHash: z.string().trim().regex(/^0x[a-fA-F0-9]+$/).optional(),
+  metadata: z.unknown().optional()
+});
+
+export const createUserSchema = z.object({
+  walletAddress: walletAddressSchema,
+  role: z.enum(USER_ROLES),
+  issuerId: z.string().trim().min(1).optional(),
+  studentId: z.string().trim().min(1).optional(),
+  verifierName: z.string().trim().min(2).optional()
 });

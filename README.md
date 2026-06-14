@@ -31,6 +31,10 @@ This phase includes Solidity/Hardhat registry artifacts and MetaMask-based front
 npm install
 ```
 
+Create a local environment file from [.env.example](.env.example). The demo
+defaults to Hardhat Local, while backend verification reads the registry through
+`SERVER_RPC_URL` and `REGISTRY_CONTRACT_ADDRESS` when those values are set.
+
 Create and seed the local SQLite database:
 
 ```bash
@@ -154,11 +158,28 @@ Seed data includes:
 - A valid issued credential
 - An expired/inactive credential
 - A sample verifier request record
+- Wallet-auth demo users for Hardhat account #0 as admin, #1 as issuer,
+  #2 as student, and #3 as verifier
 
 Credential JSON is stored as a string for SQLite compatibility and returned as parsed JSON by the API.
 
 ## Implemented Features
 
+- Wallet-based demo authentication
+  - nonce challenge endpoint
+  - MetaMask signature verification
+  - signed HTTP-only session cookie
+  - role mapping for admin, issuer, student, and verifier wallets
+- API-level role authorization
+  - admin-only issuer and user management
+  - issuer-scoped student and credential issuance
+  - student-scoped wallet credential reads
+  - verifier-only challenge creation and verification
+- Credential lifecycle and audit trail
+  - credentials start as `PENDING_ONCHAIN`
+  - successful hash registration marks credentials `ISSUED`
+  - revocation stores tx hash, reason, and timestamp
+  - authenticated actions and blockchain callbacks are recorded in `AuditLog`
 - Landing page with role cards and dashboard entry points
 - Admin issuer dashboard
   - list issuers from SQLite
@@ -166,17 +187,21 @@ Credential JSON is stored as a string for SQLite compatibility and returned as p
   - remove issuers
   - toggle local trusted status
   - connect MetaMask
+  - sign in with a wallet-backed admin session
   - register/remove issuers on-chain with the contract owner wallet
   - register/check the `StudentCredential` schema on-chain
+  - inspect recent audit logs
 - Issuer dashboard
   - list students from SQLite
   - add students
   - activate/deactivate students
-  - issue credentials only for active students
+  - issue credentials only for active students as `PENDING_ONCHAIN`
   - store minimal VC-like JSON and deterministic hash
+  - add an issuer wallet signature proof to credential JSON
   - register credential hashes on-chain with a trusted issuer wallet
+  - mark local credentials `ISSUED` after successful on-chain registration
   - revoke credential hashes on-chain with the original issuer wallet
-  - mark the local credential status as `REVOKED` after successful on-chain revocation
+  - mark the local credential status as `REVOKED` with revocation metadata after successful on-chain revocation
 - Student wallet
   - select a student
   - view credentials for that student
@@ -189,10 +214,10 @@ Credential JSON is stored as a string for SQLite compatibility and returned as p
   - generate 10-minute verification challenges
   - select or paste a credential
   - paste presentation proof JSON
-  - approve/reject using local off-chain checks
-  - run on-chain issuer, schema, registration, revocation, and issuer-match checks
+  - approve/reject using backend local off-chain checks
+  - run backend on-chain issuer, schema, registration, revocation, and issuer-match checks
   - verify holder signature, nonce, expiry, and replay status
-  - approve only when off-chain, on-chain, and holder proof checks pass
+  - approve only when off-chain, issuer proof, on-chain, and holder proof checks pass
   - persist verification request results
 
 ## Credential Privacy
@@ -234,9 +259,9 @@ Nonce: ...
 
 The wallet returns presentation proof JSON containing the credential id, credential hash, student wallet address, request id, nonce, verifier name, exact signed message, and signature.
 
-The verifier checks that the proof matches the credential, the request exists, the nonce matches, the request is not expired, the request has not already been used, the student wallet matches the credential subject DID, the signature recovers to that wallet, and the signed message reconstructs exactly.
+The verifier checks that the proof matches the credential, the request exists, the nonce matches, the request is not expired, the request has not already been used, the student wallet matches the credential subject DID, the signature recovers to that wallet, and the signed message reconstructs exactly. The backend also verifies the issuer proof embedded in the credential JSON.
 
-Replay prevention is handled by 10-minute challenge expiry plus a `used` flag. A request is marked used only after credential checks, on-chain checks, and holder proof checks all pass. Reusing the same proof/request is rejected.
+Replay prevention is handled by 10-minute challenge expiry plus a `used` flag. A request is marked used only after credential checks, issuer proof checks, backend on-chain checks, and holder proof checks all pass. Reusing the same proof/request is rejected.
 
 ## Frontend Blockchain Integration
 
@@ -263,22 +288,20 @@ Browser write calls use the MetaMask signer only. No private keys are stored in 
 2. Deploy the contract in another terminal: `npm run hardhat:deploy:local`.
 3. Start the Next.js app: `npm run dev`.
 4. Add Hardhat Local (`chainId` `31337`) to MetaMask.
-5. Import Hardhat account #0 and connect it in **Admin** as the contract owner.
-6. In **Admin**, create or choose an issuer whose wallet address is a MetaMask-imported Hardhat account, such as account #1.
-7. Register that issuer on-chain and register the `StudentCredential` schema on-chain.
-8. Switch MetaMask to the issuer wallet.
-9. In **Issuer**, create/activate a student for that issuer and issue a credential in the database.
-10. Register the credential hash on-chain.
-11. In **Verifier**, generate a verification challenge and copy the challenge JSON.
-12. In **Wallet**, select the student credential, paste the challenge, connect the student wallet, and create a presentation proof.
-13. Copy both the credential JSON and the presentation proof JSON.
-14. In **Verifier**, paste/select the credential and paste the proof, then verify. It is **Approved** only if off-chain checks, on-chain checks, and holder proof checks pass.
-15. Verify again with the same proof/request and observe a **Rejected** result because the request is already used.
-16. Try signing from the wrong wallet and observe a **Rejected** result because the recovered signer does not match the credential subject wallet.
-17. Back in **Issuer**, revoke the credential on-chain. The local DB credential status is updated to `REVOKED`.
-18. Generate a fresh challenge/proof and verify again; observe a **Rejected** result because the credential is revoked.
+5. Import Hardhat account #0, open **Admin**, connect MetaMask, and use **Sign in** to create the admin session.
+6. Register the seeded Ankara University issuer on-chain and register the `StudentCredential` schema on-chain.
+7. Switch MetaMask to Hardhat account #1, open **Issuer**, connect, sign in, and issue a credential. New credentials start as `PENDING_ONCHAIN`.
+8. Register the credential hash on-chain. The dashboard signs an issuer proof, stores it in the credential JSON, and marks the credential `ISSUED` after the transaction succeeds.
+9. Switch MetaMask to Hardhat account #3, open **Verifier**, connect, sign in, generate a verification challenge, and copy the challenge JSON.
+10. Switch MetaMask to Hardhat account #2, open **Wallet**, connect, sign in, paste the challenge, and create a presentation proof.
+11. Copy both the credential JSON and the presentation proof JSON.
+12. In **Verifier**, paste/select the credential and paste the proof, then verify. It is **Approved** only if backend off-chain checks, issuer proof checks, backend on-chain checks, and holder proof checks pass.
+13. Verify again with the same proof/request and observe a **Rejected** result because the request is already used.
+14. Try signing from the wrong wallet and observe a **Rejected** result because the recovered signer does not match the credential subject wallet.
+15. Back in **Issuer**, revoke the credential on-chain. The local DB credential status is updated to `REVOKED` with transaction metadata.
+16. Generate a fresh challenge/proof and verify again; observe a **Rejected** result because the credential is revoked.
 
-Seeded issuers are useful for local database demos, but their toy wallet addresses are not Hardhat signer accounts. For on-chain write demos, create an issuer that uses an imported Hardhat account address.
+Seeded demo users are mapped to local Hardhat signer accounts so wallet auth, issuer proof signing, presentation signing, and on-chain writes can be demonstrated without creating extra records.
 
 ## Useful Commands
 

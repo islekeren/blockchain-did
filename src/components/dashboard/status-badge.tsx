@@ -15,11 +15,15 @@ export function StatusBadge({ value }: StatusBadgeProps) {
     return <Badge variant="success">{value}</Badge>;
   }
 
-  if (["PENDING", "EXPIRED"].includes(normalized)) {
+  if (["PENDING", "PENDING_ONCHAIN", "EXPIRED"].includes(normalized)) {
     return <Badge variant="warning">{value}</Badge>;
   }
 
-  if (["UNTRUSTED", "INACTIVE", "REVOKED", "REJECTED"].includes(normalized)) {
+  if (
+    ["UNTRUSTED", "INACTIVE", "REVOKED", "REJECTED", "FAILED"].includes(
+      normalized
+    )
+  ) {
     return <Badge variant="destructive">{value}</Badge>;
   }
 
