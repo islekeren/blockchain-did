@@ -89,18 +89,24 @@ model VerificationRequest {
   id                 String              @id @default(cuid())
   credentialId       String?
   verifierName       String
+  callbackUrl        String?
+  requestedCredentialType String          @default("StudentCredential")
   nonce              String?             @unique
   challengeMessage   String?
   result             String              @default("PENDING")
   reasons            String
+  checkResults       String?
   used               Boolean             @default(false)
   expiresAt          DateTime?
+  verifiedAt         DateTime?
   presentationProofs PresentationProof[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
   @@index([credentialId])
+  @@index([result])
   @@index([used])
+  @@index([createdAt])
 }
 
 model PresentationProof {

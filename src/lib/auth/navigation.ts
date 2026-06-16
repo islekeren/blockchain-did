@@ -37,7 +37,9 @@ export function getRoleDestination(role: UserRole) {
 export function roleForPath(path: string): UserRole | null {
   const pathname = path.split(/[?#]/)[0];
   const match = Object.entries(ROLE_DESTINATIONS).find(
-    ([, destination]) => destination.href === pathname
+    ([, destination]) =>
+      destination.href === pathname ||
+      pathname.startsWith(`${destination.href}/`)
   );
 
   return match ? (match[0] as UserRole) : null;

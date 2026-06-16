@@ -76,6 +76,21 @@ export const createVerificationChallengeSchema = z.object({
   verifierName: z.string().trim().min(2).default("EduDiscounts Marketplace")
 });
 
+export const createVerifierRequestSchema = z.object({
+  verifierName: z.string().trim().min(2).default("EduDiscounts Marketplace"),
+  callbackUrl: z.string().trim().optional(),
+  requestedCredentialType: z
+    .string()
+    .trim()
+    .min(1)
+    .default("StudentCredential")
+});
+
+export const submitVerifierPresentationSchema = z.object({
+  credentialId: z.string().trim().min(1),
+  presentationProof: z.record(z.unknown())
+});
+
 export const useVerificationRequestSchema = z.object({
   credentialId: z.string().trim().min(1),
   credentialHash: z.string().trim().min(1),

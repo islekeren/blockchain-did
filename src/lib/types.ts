@@ -85,6 +85,35 @@ export type VerificationResult = {
   verification?: unknown;
 };
 
+export type VerificationRequestStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "EXPIRED";
+
+export type VerificationRequestRecord = {
+  requestId: string;
+  credentialId: string | null;
+  verifierName: string;
+  callbackUrl: string | null;
+  requestedCredentialType: string;
+  nonce: string | null;
+  challengeMessage: string | null;
+  status: VerificationRequestStatus;
+  result: VerificationRequestStatus;
+  used: boolean;
+  expiresAt: string | null;
+  verifiedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  walletRedirectUrl: string;
+  checkResults: {
+    offChain: VerificationCheck[];
+    onChain: VerificationCheck[];
+    holderProof: VerificationCheck[];
+  };
+};
+
 export type AuditLogRecord = {
   id: string;
   actorUserId: string | null;

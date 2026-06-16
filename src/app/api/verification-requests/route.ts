@@ -4,6 +4,7 @@ import { ZodError } from "zod";
 import { writeAuditLog } from "@/lib/audit/log";
 import { authErrorResponse, requireRole } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
+import { buildChallengeDetails } from "@/lib/verification/requests";
 import { createVerificationChallengeSchema } from "@/lib/validation/schemas";
 
 export const runtime = "nodejs";
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
       data: {
         id: requestId,
         verifierName,
+        requestedCredentialType: "StudentCredential",
         nonce,
         result: "PENDING",
         reasons: "[]",
@@ -37,13 +39,7 @@ export async function POST(request: Request) {
       }
     });
 
-    const challenge = {
-      requestId: verificationRequest.id,
-      nonce: verificationRequest.nonce,
-      verifierName: verificationRequest.verifierName,
-      createdAt: verificationRequest.createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString()
-    };
+    const challenge = buildChallengeDetails(verificationRequest);
 
     const updatedRequest = await prisma.verificationRequest.update({
       where: { id: verificationRequest.id },

@@ -130,19 +130,23 @@ Add a custom MetaMask network for local Hardhat:
 - Chain ID: `31337`
 - Currency symbol: `ETH`
 
-Import the local development accounts printed by `npm run hardhat:node`. The contract owner is the account that deploys the contract, normally Hardhat account #0:
+Import the local development accounts printed by `npm run hardhat:node`.
+The seeded login roles are mapped to these Hardhat accounts:
 
-```text
-Address: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-Private key: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-```
+| Role | Page | Hardhat account | Address | Private key |
+| --- | --- | --- | --- | --- |
+| Admin | `/admin` | #0 | `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` | `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` |
+| Issuer | `/issuer` | #1 | `0x70997970C51812dc3A010C7d01b50e0d17dc79C8` | `0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d` |
+| Student | `/wallet` | #2 | `0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC` | `0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a` |
+| Verifier | `/verifier` | #3 | `0x90F79bf6EB2c4f870365E785982E1f101E93b906` | `0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6` |
 
-Use another Hardhat account as a demo issuer wallet, for example account #1:
-
-```text
-Address: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
-Private key: 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
-```
+On the login page, MetaMask shows the currently selected wallet address. For
+example, `0xf39F...2266` is the seeded admin wallet. `No active session` means
+the wallet is connected in MetaMask, but the app has not created a signed login
+session yet. Switch accounts in MetaMask before signing in as a different role.
+Unknown wallets can sign in, but they are created as external verifier users by
+default and cannot open admin, issuer, or student pages unless a matching user
+record exists.
 
 These private keys are public Hardhat development keys. Never use them on mainnet or any live network.
 
@@ -211,14 +215,15 @@ Credential JSON is stored as a string for SQLite compatibility and returned as p
   - sign a deterministic presentation message
   - copy presentation proof JSON
 - Verifier dashboard
-  - generate 10-minute verification challenges
-  - select or paste a credential
-  - paste presentation proof JSON
-  - approve/reject using backend local off-chain checks
+  - connect and sign in with the verifier MetaMask wallet
+  - view recent verification requests, statuses, and result details
+  - create demo verification requests that return wallet redirect URLs
+  - approve/reject submitted presentations using backend local off-chain checks
   - run backend on-chain issuer, schema, registration, revocation, and issuer-match checks
   - verify holder signature, nonce, expiry, and replay status
   - approve only when off-chain, issuer proof, on-chain, and holder proof checks pass
   - persist verification request results
+  - keep the manual JSON playground available at `/verifier/debug` for development/testing only
 
 ## Credential Privacy
 
@@ -263,6 +268,87 @@ The verifier checks that the proof matches the credential, the request exists, t
 
 Replay prevention is handled by 10-minute challenge expiry plus a `used` flag. A request is marked used only after credential checks, issuer proof checks, backend on-chain checks, and holder proof checks all pass. Reusing the same proof/request is rejected.
 
+## Verifier Integration Flow
+
+The primary verifier flow is request based:
+
+1. A verifier or external discount platform creates a request with `POST /api/verifier/requests`.
+2. The API stores a 10-minute nonce-backed request and returns `walletRedirectUrl`, such as `/wallet/present?requestId=...`.
+3. The student opens the redirect URL, reviews the verifier name, requested credential type, expiration, and shared eligibility facts.
+4. The student selects an eligible issued credential and clicks **Approve with Wallet**.
+5. The wallet page uses the existing MetaMask holder presentation proof logic, then submits `credentialId` and `presentationProof` automatically.
+6. The backend verifies local off-chain credential state, on-chain registry state, issuer proof, and holder presentation proof checks.
+7. The verifier checks the dashboard detail page or compact result API for `APPROVED`, `REJECTED`, `PENDING`, or computed `EXPIRED`.
+
+Manual challenge JSON remains visible and copyable in the wallet approval debug section for transparency. The old copy/paste verifier playground is available at `/verifier/debug` only for development/testing.
+
+### Verifier API Endpoints
+
+Create a request:
+
+```http
+POST /api/verifier/requests
+Content-Type: application/json
+
+{
+  "verifierName": "Spotify Student Discount",
+  "callbackUrl": "https://example.com/optional-callback",
+  "requestedCredentialType": "StudentCredential"
+}
+```
+
+Returns:
+
+```json
+{
+  "requestId": "...",
+  "nonce": "...",
+  "verifierName": "Spotify Student Discount",
+  "requestedCredentialType": "StudentCredential",
+  "expiresAt": "...",
+  "walletRedirectUrl": "/wallet/present?requestId=..."
+}
+```
+
+List recent requests:
+
+```http
+GET /api/verifier/requests
+```
+
+Get request details:
+
+```http
+GET /api/verifier/requests/:requestId
+```
+
+Submit a student presentation:
+
+```http
+POST /api/verifier/requests/:requestId/presentation
+Content-Type: application/json
+
+{
+  "credentialId": "...",
+  "presentationProof": {
+    "credentialId": "...",
+    "credentialHash": "...",
+    "studentWalletAddress": "...",
+    "requestId": "...",
+    "nonce": "...",
+    "verifierName": "...",
+    "message": "...",
+    "signature": "..."
+  }
+}
+```
+
+Read the compact external result:
+
+```http
+GET /api/verifier/requests/:requestId/result
+```
+
 ## Frontend Blockchain Integration
 
 Frontend contract helpers live in [src/lib/blockchain/registryClient.ts](src/lib/blockchain/registryClient.ts). They use MetaMask through ethers.js and the generated deployment artifacts:
@@ -292,14 +378,15 @@ Browser write calls use the MetaMask signer only. No private keys are stored in 
 6. Register the seeded Ankara University issuer on-chain and register the `StudentCredential` schema on-chain.
 7. Switch MetaMask to Hardhat account #1, open **Issuer**, connect, sign in, and issue a credential. New credentials start as `PENDING_ONCHAIN`.
 8. Register the credential hash on-chain. The dashboard signs an issuer proof, stores it in the credential JSON, and marks the credential `ISSUED` after the transaction succeeds.
-9. Switch MetaMask to Hardhat account #3, open **Verifier**, connect, sign in, generate a verification challenge, and copy the challenge JSON.
-10. Switch MetaMask to Hardhat account #2, open **Wallet**, connect, sign in, paste the challenge, and create a presentation proof.
-11. Copy both the credential JSON and the presentation proof JSON.
-12. In **Verifier**, paste/select the credential and paste the proof, then verify. It is **Approved** only if backend off-chain checks, issuer proof checks, backend on-chain checks, and holder proof checks pass.
-13. Verify again with the same proof/request and observe a **Rejected** result because the request is already used.
-14. Try signing from the wrong wallet and observe a **Rejected** result because the recovered signer does not match the credential subject wallet.
-15. Back in **Issuer**, revoke the credential on-chain. The local DB credential status is updated to `REVOKED` with transaction metadata.
-16. Generate a fresh challenge/proof and verify again; observe a **Rejected** result because the credential is revoked.
+9. Switch MetaMask to Hardhat account #3, open **Verifier**, connect, sign in, and create a demo verification request.
+10. Copy or open the returned `walletRedirectUrl`.
+11. Switch MetaMask to Hardhat account #2, open the wallet redirect URL, connect, sign in, select the issued credential, and click **Approve with Wallet**.
+12. The wallet page signs the existing presentation message and submits the presentation automatically.
+13. Return to `/verifier/requests/:requestId` and observe the final checks. It is **Approved** only if backend off-chain checks, issuer proof checks, backend on-chain checks, and holder proof checks pass.
+14. Try approving again with the same request and observe a rejection because the request is already used.
+15. Try signing from the wrong wallet and observe a **Rejected** result because the recovered signer does not match the credential subject wallet.
+16. Back in **Issuer**, revoke the credential on-chain. The local DB credential status is updated to `REVOKED` with transaction metadata.
+17. Create a fresh request and approve again; observe a **Rejected** result because the credential is revoked.
 
 Seeded demo users are mapped to local Hardhat signer accounts so wallet auth, issuer proof signing, presentation signing, and on-chain writes can be demonstrated without creating extra records.
 
