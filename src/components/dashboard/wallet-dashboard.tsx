@@ -4,9 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import { getAddress } from "ethers";
 import { Check, Copy, Signature, WalletCards } from "lucide-react";
 
+import { useWalletConnection } from "@/components/auth/wallet-provider";
 import { JsonViewer } from "@/components/dashboard/json-viewer";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { WalletConnect } from "@/components/wallet-connect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +25,6 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { useWallet } from "@/hooks/useWallet";
 import { toBlockchainErrorMessage } from "@/lib/blockchain/provider";
 import { signPresentation } from "@/lib/presentation/message";
 import type { CredentialRecord, StudentRecord } from "@/lib/types";
@@ -81,7 +80,7 @@ function walletFromCredentialSubject(credential: CredentialRecord) {
 }
 
 export function WalletDashboard() {
-  const wallet = useWallet();
+  const wallet = useWalletConnection();
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
@@ -230,8 +229,6 @@ export function WalletDashboard() {
 
   return (
     <div className="grid gap-6">
-      <WalletConnect wallet={wallet} />
-
       <div className="grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
         <Card>
           <CardHeader>

@@ -134,29 +134,9 @@ function verifySessionToken(token: string): SessionPayload | null {
   }
 }
 
-export function setSessionCookie(response: NextResponse, token: string) {
-  response.cookies.set(SESSION_COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS
-  });
-}
-
-export function clearSessionCookie(response: NextResponse) {
-  response.cookies.set(SESSION_COOKIE_NAME, "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 0
-  });
-}
-
-export async function getCurrentUser(request: Request): Promise<CurrentUser | null> {
-  const token = readCookie(request, SESSION_COOKIE_NAME);
-
+export async function getCurrentUserFromToken(
+  token: string | null
+): Promise<CurrentUser | null> {
   if (!token) {
     return null;
   }
@@ -188,6 +168,30 @@ export async function getCurrentUser(request: Request): Promise<CurrentUser | nu
     studentId: user.studentId,
     verifierName: user.verifierName
   };
+}
+
+export function setSessionCookie(response: NextResponse, token: string) {
+  response.cookies.set(SESSION_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: SESSION_TTL_SECONDS
+  });
+}
+
+export function clearSessionCookie(response: NextResponse) {
+  response.cookies.set(SESSION_COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0
+  });
+}
+
+export async function getCurrentUser(request: Request): Promise<CurrentUser | null> {
+  return getCurrentUserFromToken(readCookie(request, SESSION_COOKIE_NAME));
 }
 
 export async function requireUser(request: Request) {

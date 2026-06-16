@@ -11,9 +11,9 @@ import {
   UserX
 } from "lucide-react";
 
+import { useWalletConnection } from "@/components/auth/wallet-provider";
 import { Field } from "@/components/dashboard/field";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { WalletConnect } from "@/components/wallet-connect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,6 @@ import {
   TableRow
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useWallet } from "@/hooks/useWallet";
 import {
   getCredentialIssuerOnChain,
   isCredentialRegisteredOnChain,
@@ -129,7 +128,7 @@ function TxFeedback({ state }: { state?: TxState }) {
 }
 
 export function IssuerDashboard() {
-  const wallet = useWallet();
+  const wallet = useWalletConnection();
   const [issuers, setIssuers] = useState<IssuerRecord[]>([]);
   const [students, setStudents] = useState<StudentRecord[]>([]);
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
@@ -503,9 +502,6 @@ export function IssuerDashboard() {
           </CardHeader>
         </Card>
       </div>
-
-      <WalletConnect wallet={wallet} />
-
       {message ? (
         <Alert variant="destructive">
           <AlertTitle>Issuer action failed</AlertTitle>

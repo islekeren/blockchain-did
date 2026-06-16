@@ -5,7 +5,6 @@ import { Check, CheckCircle2, Copy, KeyRound, ShieldQuestion, XCircle } from "lu
 
 import { JsonViewer } from "@/components/dashboard/json-viewer";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { WalletConnect } from "@/components/wallet-connect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,7 +24,6 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
-import { useWallet } from "@/hooks/useWallet";
 import type {
   CredentialRecord,
   VerificationCheck,
@@ -78,7 +76,6 @@ function VerificationSection({
 }
 
 export function VerifierDashboard() {
-  const wallet = useWallet();
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
   const [selectedCredentialId, setSelectedCredentialId] = useState("");
   const [credentialJson, setCredentialJson] = useState("");
@@ -207,8 +204,6 @@ export function VerifierDashboard() {
 
   return (
     <div className="grid gap-6">
-      <WalletConnect wallet={wallet} />
-
       <Card>
         <CardHeader className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>

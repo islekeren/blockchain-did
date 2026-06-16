@@ -3,9 +3,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Building2, FileCheck2, Plus, RefreshCw, ShieldCheck, Trash2 } from "lucide-react";
 
+import { useWalletConnection } from "@/components/auth/wallet-provider";
 import { Field } from "@/components/dashboard/field";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { WalletConnect } from "@/components/wallet-connect";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,6 @@ import {
   TableHeader,
   TableRow
 } from "@/components/ui/table";
-import { useWallet } from "@/hooks/useWallet";
 import {
   getIssuerDidOnChain,
   isSchemaValidOnChain,
@@ -131,7 +130,7 @@ async function writeClientAudit(input: {
 }
 
 export function AdminDashboard() {
-  const wallet = useWallet();
+  const wallet = useWalletConnection();
   const [issuers, setIssuers] = useState<IssuerRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -410,9 +409,6 @@ export function AdminDashboard() {
           </CardHeader>
         </Card>
       </div>
-
-      <WalletConnect wallet={wallet} />
-
       {message ? (
         <Alert variant="destructive">
           <AlertTitle>Issuer action failed</AlertTitle>

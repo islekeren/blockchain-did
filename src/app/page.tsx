@@ -18,11 +18,12 @@ import {
   CardTitle
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { buildRoleLoginPath } from "@/lib/auth/navigation";
 
 const roles = [
   {
     title: "Admin",
-    href: "/admin",
+    href: buildRoleLoginPath("ADMIN"),
     icon: ShieldCheck,
     description:
       "Manage issuer records and prepare the trusted registry for future smart contracts.",
@@ -30,7 +31,7 @@ const roles = [
   },
   {
     title: "University / Issuer",
-    href: "/issuer",
+    href: buildRoleLoginPath("ISSUER"),
     icon: Landmark,
     description:
       "Maintain students and issue minimal student credentials into the local database.",
@@ -38,7 +39,7 @@ const roles = [
   },
   {
     title: "Student / Holder",
-    href: "/wallet",
+    href: buildRoleLoginPath("STUDENT"),
     icon: WalletCards,
     description:
       "View credentials as a privacy-preserving wallet presentation payload.",
@@ -46,7 +47,7 @@ const roles = [
   },
   {
     title: "Discount Platform / Verifier",
-    href: "/verifier",
+    href: buildRoleLoginPath("VERIFIER"),
     icon: TicketCheck,
     description:
       "Check credential status, issuer trust, student activity, and expiration off-chain.",
@@ -72,10 +73,10 @@ export default function Home() {
           </div>
           <div className="flex flex-wrap gap-2">
             <Button asChild size="sm" variant="outline">
-              <Link href="/admin">Admin</Link>
+              <Link href={buildRoleLoginPath("ADMIN")}>Admin</Link>
             </Button>
             <Button asChild size="sm">
-              <Link href="/issuer">Start issuing</Link>
+              <Link href={buildRoleLoginPath("ISSUER")}>Start issuing</Link>
             </Button>
           </div>
         </header>
@@ -93,13 +94,13 @@ export default function Home() {
             </p>
             <div className="flex flex-wrap gap-3">
               <Button asChild>
-                <Link href="/issuer">
+                <Link href={buildRoleLoginPath("ISSUER")}>
                   <BadgeCheck />
                   Issue a credential
                 </Link>
               </Button>
               <Button asChild variant="outline">
-                <Link href="/verifier">
+                <Link href={buildRoleLoginPath("VERIFIER")}>
                   <Building2 />
                   Verify a credential
                 </Link>
