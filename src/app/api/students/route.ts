@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { Wallet } from "ethers";
 
 import { writeAuditLog } from "@/lib/audit/log";
 import { authErrorResponse, requireRole, requireUser } from "@/lib/auth/session";
@@ -50,10 +51,15 @@ export async function POST(request: Request) {
       );
     }
 
+    const generatedWallet = data.walletAddress ? null : Wallet.createRandom();
+    const walletAddress = normalizeWalletAddress(
+      data.walletAddress ?? generatedWallet?.address ?? ""
+    );
     const student = await prisma.student.create({
       data: {
         ...data,
-        walletAddress: normalizeWalletAddress(data.walletAddress),
+        walletAddress,
+        walletPrivateKey: generatedWallet?.privateKey ?? null,
         active: data.active ?? true
       },
       include: {
@@ -65,6 +71,31 @@ export async function POST(request: Request) {
         }
       }
     });
+    const existingUser = await prisma.user.findUnique({
+      where: { walletAddress }
+    });
+
+    if (!existingUser) {
+      await prisma.user.create({
+        data: {
+          walletAddress,
+          role: "STUDENT",
+          studentId: student.id
+        }
+      });
+    } else if (
+      existingUser.role === "VERIFIER" &&
+      existingUser.verifierName === "External Verifier"
+    ) {
+      await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          role: "STUDENT",
+          verifierName: null,
+          studentId: student.id
+        }
+      });
+    }
     await writeAuditLog({
       actor: user,
       action: "student.create",
@@ -72,11 +103,19 @@ export async function POST(request: Request) {
       targetId: student.id,
       metadata: {
         universityId: student.universityId,
-        walletAddress: student.walletAddress
+        walletAddress: student.walletAddress,
+        walletGenerated: Boolean(generatedWallet)
       }
     });
 
-    return NextResponse.json({ student }, { status: 201 });
+    return NextResponse.json(
+      {
+        student,
+        walletGenerated: Boolean(generatedWallet),
+        generatedWalletPrivateKey: generatedWallet?.privateKey ?? null
+      },
+      { status: 201 }
+    );
   } catch (error) {
     const authResponse = authErrorResponse(error);
 

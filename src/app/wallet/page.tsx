@@ -10,7 +10,7 @@ export default async function WalletPage() {
       role="Student / Holder"
       roleKey="STUDENT"
       title="Student Credential Wallet"
-      description="The wallet role lets a student view credentials and sign a verifier challenge with the wallet that owns the credential subject DID."
+      description="Review your student profile, credential status, and issued credential JSON. Normal verifier approvals open through /wallet/present?requestId=..."
     >
       <WalletDashboard />
     </PageShell>

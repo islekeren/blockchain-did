@@ -35,17 +35,46 @@ export async function POST(request: Request, context: RouteContext) {
 
     const status = getRequestStatus(verificationRequest);
 
-    if (status === "EXPIRED") {
+    if (status !== "PENDING") {
       return NextResponse.json(
-        { error: "Verification request has expired.", status },
+        {
+          error:
+            status === "EXPIRED"
+              ? "Verification request has expired."
+              : "Verification request is no longer accepting presentations.",
+          status
+        },
         { status: 400 }
       );
     }
 
-    if (verificationRequest.used || status === "APPROVED") {
+    if (verificationRequest.used) {
       return NextResponse.json(
         { error: "Verification request has already been used.", status },
         { status: 400 }
+      );
+    }
+
+    if (!user.studentId) {
+      return NextResponse.json(
+        { error: "Student session is not linked to a student record." },
+        { status: 403 }
+      );
+    }
+
+    const submittedCredential = await prisma.credential.findFirst({
+      where: {
+        OR: [{ id: data.credentialId }, { credentialId: data.credentialId }]
+      },
+      select: {
+        studentId: true
+      }
+    });
+
+    if (submittedCredential && submittedCredential.studentId !== user.studentId) {
+      return NextResponse.json(
+        { error: "Student wallets can only submit their own credentials." },
+        { status: 403 }
       );
     }
 

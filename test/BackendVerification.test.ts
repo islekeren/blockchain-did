@@ -127,6 +127,7 @@ function installVerifyRoute(input: {
     }
   });
 
+  clearModule("./src/lib/verification/service");
   clearModule("./src/app/api/verify/route");
 
   const route = require("../src/app/api/verify/route") as VerifyRoute;

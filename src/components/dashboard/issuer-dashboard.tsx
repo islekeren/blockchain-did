@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Check,
+  Copy,
   FileBadge,
   Plus,
   RefreshCw,
@@ -76,6 +78,18 @@ type CredentialsResponse = {
   credentials: CredentialRecord[];
 };
 
+type StudentCreateResponse = {
+  student?: StudentRecord;
+  walletGenerated?: boolean;
+  generatedWalletPrivateKey?: string | null;
+  error?: string;
+};
+
+type CredentialCreateResponse = {
+  credential?: CredentialRecord;
+  error?: string;
+};
+
 type TxState = {
   status: "idle" | "pending" | "success" | "error";
   txHash?: string;
@@ -134,9 +148,20 @@ export function IssuerDashboard() {
   const [credentials, setCredentials] = useState<CredentialRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [flowSaving, setFlowSaving] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState(emptyStudentForm);
+  const [flowForm, setFlowForm] = useState(emptyStudentForm);
   const [message, setMessage] = useState<string | null>(null);
+  const [flowMessage, setFlowMessage] = useState<string | null>(null);
+  const [flowMessageVariant, setFlowMessageVariant] = useState<
+    "success" | "warning" | "destructive"
+  >("success");
+  const [flowCredential, setFlowCredential] = useState<CredentialRecord | null>(
+    null
+  );
+  const [flowPrivateKey, setFlowPrivateKey] = useState<string | null>(null);
+  const [copiedWallet, setCopiedWallet] = useState<string | null>(null);
   const [lastIssued, setLastIssued] = useState<string | null>(null);
   const [onChainCredentials, setOnChainCredentials] = useState<
     Record<string, OnChainCredentialStatus>
@@ -157,6 +182,10 @@ export function IssuerDashboard() {
     setStudents(studentData.students ?? []);
     setCredentials(credentialData.credentials ?? []);
     setForm((current) => ({
+      ...current,
+      universityId: current.universityId || issuerData.issuers?.[0]?.id || ""
+    }));
+    setFlowForm((current) => ({
       ...current,
       universityId: current.universityId || issuerData.issuers?.[0]?.id || ""
     }));
@@ -262,20 +291,34 @@ export function IssuerDashboard() {
     void refreshOnChainCredentials();
   }, [refreshOnChainCredentials]);
 
+  async function createStudentRecord(input: typeof emptyStudentForm) {
+    const response = await fetch("/api/students", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    });
+    const data = (await response.json()) as StudentCreateResponse;
+
+    if (!response.ok || !data.student) {
+      throw new Error(data.error ?? "Unable to create student");
+    }
+
+    return {
+      student: data.student,
+      walletGenerated: data.walletGenerated === true,
+      generatedWalletPrivateKey: data.generatedWalletPrivateKey ?? null
+    };
+  }
+
   async function createStudent(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
     setMessage(null);
 
-    const response = await fetch("/api/students", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form)
-    });
-
-    if (!response.ok) {
-      const data = (await response.json()) as { error?: string };
-      setMessage(data.error ?? "Unable to create student");
+    try {
+      await createStudentRecord(form);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to create student");
       setSaving(false);
       return;
     }
@@ -298,10 +341,13 @@ export function IssuerDashboard() {
     await loadData();
   }
 
-  async function issueCredential(student: StudentRecord) {
-    setMessage(null);
-    setLastIssued(null);
+  async function copyWalletAddress(walletAddress: string) {
+    await navigator.clipboard.writeText(walletAddress);
+    setCopiedWallet(walletAddress);
+    window.setTimeout(() => setCopiedWallet(null), 1500);
+  }
 
+  async function issueCredentialForStudent(student: StudentRecord) {
     const response = await fetch("/api/credentials", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -310,18 +356,33 @@ export function IssuerDashboard() {
         issuerId: student.universityId
       })
     });
-
-    const data = (await response.json()) as {
-      credential?: CredentialRecord;
-      error?: string;
-    };
+    const data = (await response.json()) as CredentialCreateResponse;
 
     if (!response.ok) {
-      setMessage(data.error ?? "Unable to issue credential");
+      throw new Error(data.error ?? "Unable to issue credential");
+    }
+
+    if (!data.credential) {
+      throw new Error("Credential response was empty.");
+    }
+
+    return data.credential;
+  }
+
+  async function issueCredential(student: StudentRecord) {
+    setMessage(null);
+    setLastIssued(null);
+
+    let credential: CredentialRecord;
+
+    try {
+      credential = await issueCredentialForStudent(student);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to issue credential");
       return;
     }
 
-    setLastIssued(data.credential?.credentialId ?? "Credential issued");
+    setLastIssued(credential.credentialId);
     await loadData();
   }
 
@@ -332,86 +393,91 @@ export function IssuerDashboard() {
     }));
   }
 
-  async function registerCredentialHash(credential: CredentialRecord) {
+  async function registerCredentialHashOrThrow(credential: CredentialRecord) {
     if (!credential.credentialHash) {
-      setCredentialTxState(credential.id, {
-        status: "error",
-        error: "Credential hash is missing"
-      });
-      return;
+      throw new Error("Credential hash is missing");
     }
 
-    setCredentialTxState(credential.id, { status: "pending" });
+    let credentialForRegistration = credential;
 
-    try {
-      let credentialForRegistration = credential;
+    if (!credential.credentialJson.proof) {
+      const signer = await requestSigner();
+      const signerAddress = await signer.getAddress();
+      const issuerAddress = credential.issuer?.walletAddress;
 
-      if (!credential.credentialJson.proof) {
-        const signer = await requestSigner();
-        const signerAddress = await signer.getAddress();
-        const issuerAddress = credential.issuer?.walletAddress;
-
-        if (!issuerAddress || signerAddress !== issuerAddress) {
-          throw new Error(
-            "Connected wallet must match the credential issuer before signing the VC proof."
-          );
-        }
-
-        const signature = await signer.signMessage(
-          createCredentialProofMessage({
-            credential: credential.credentialJson,
-            credentialHash: credential.credentialHash
-          })
+      if (!issuerAddress || signerAddress !== issuerAddress) {
+        throw new Error(
+          "Connected wallet must match the credential issuer before signing the VC proof."
         );
-        const issuerProof = buildIssuerCredentialProof({
-          credential: credential.credentialJson,
-          credentialHash: credential.credentialHash,
-          signature
-        });
-        const proofResponse = await fetch(`/api/credentials/${credential.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ issuerProof })
-        });
-        const proofData = (await proofResponse.json()) as {
-          credential?: CredentialRecord;
-          error?: string;
-        };
-
-        if (!proofResponse.ok || !proofData.credential) {
-          throw new Error(proofData.error ?? "Issuer proof could not be saved.");
-        }
-
-        credentialForRegistration = proofData.credential;
       }
 
-      const result = await registerCredentialHashOnChain({
-        credentialHash: credential.credentialHash
+      const signature = await signer.signMessage(
+        createCredentialProofMessage({
+          credential: credential.credentialJson,
+          credentialHash: credential.credentialHash
+        })
+      );
+      const issuerProof = buildIssuerCredentialProof({
+        credential: credential.credentialJson,
+        credentialHash: credential.credentialHash,
+        signature
       });
-      const statusResponse = await fetch(`/api/credentials/${credential.id}`, {
+      const proofResponse = await fetch(`/api/credentials/${credential.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          status: "ISSUED",
-          registeredTxHash: result.txHash
-        })
+        body: JSON.stringify({ issuerProof })
       });
-      const statusData = (await statusResponse.json()) as {
+      const proofData = (await proofResponse.json()) as {
+        credential?: CredentialRecord;
         error?: string;
       };
 
-      if (!statusResponse.ok) {
-        throw new Error(
-          statusData.error ??
-            "Credential was registered on-chain, but DB status update failed."
-        );
+      if (!proofResponse.ok || !proofData.credential) {
+        throw new Error(proofData.error ?? "Issuer proof could not be saved.");
       }
+
+      credentialForRegistration = proofData.credential;
+    }
+
+    const result = await registerCredentialHashOnChain({
+      credentialHash: credential.credentialHash
+    });
+    const statusResponse = await fetch(`/api/credentials/${credential.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "ISSUED",
+        registeredTxHash: result.txHash
+      })
+    });
+    const statusData = (await statusResponse.json()) as {
+      error?: string;
+    };
+
+    if (!statusResponse.ok) {
+      throw new Error(
+        statusData.error ??
+          "Credential was registered on-chain, but DB status update failed."
+      );
+    }
+
+    return {
+      txHash: result.txHash,
+      credential: credentialForRegistration
+    };
+  }
+
+  async function registerCredentialHash(credential: CredentialRecord) {
+    setCredentialTxState(credential.id, { status: "pending" });
+
+    try {
+      const result = await registerCredentialHashOrThrow(credential);
 
       setCredentialTxState(credential.id, {
         status: "success",
         txHash: result.txHash
       });
-      await loadOnChainCredential(credentialForRegistration);
+      await loadOnChainCredential(result.credential);
       await loadData();
       await wallet.refresh();
     } catch (error) {
@@ -422,6 +488,95 @@ export function IssuerDashboard() {
             ? error.message
             : "Credential hash registration failed"
       });
+    }
+  }
+
+  async function createStudentAndIssueCredential(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFlowSaving(true);
+    setFlowCredential(null);
+    setFlowPrivateKey(null);
+    setFlowMessage(null);
+    setMessage(null);
+    setLastIssued(null);
+
+    let createdCredential: CredentialRecord | null = null;
+
+    try {
+      const created = await createStudentRecord(flowForm);
+      const student = created.student;
+      setFlowPrivateKey(created.generatedWalletPrivateKey);
+
+      if (!student.active) {
+        setFlowMessageVariant("warning");
+        setFlowMessage(
+          created.walletGenerated
+            ? `Student was created as inactive with auto wallet ${student.walletAddress}. No credential was issued until the student is activated.`
+            : "Student was created as inactive. No credential was issued until the student is activated."
+        );
+        await loadData();
+        setFlowSaving(false);
+        return;
+      }
+
+      const credential = await issueCredentialForStudent(student);
+      createdCredential = credential;
+      setFlowCredential(credential);
+      setFlowPrivateKey(created.generatedWalletPrivateKey);
+
+      if (blockchainActionsDisabled) {
+        setFlowMessageVariant("warning");
+        setFlowMessage(
+          "Student and credential were created, but on-chain registration needs MetaMask on Hardhat Local."
+        );
+        await loadData();
+        setFlowSaving(false);
+        return;
+      }
+
+      setCredentialTxState(credential.id, { status: "pending" });
+      const result = await registerCredentialHashOrThrow(credential);
+
+      setCredentialTxState(credential.id, {
+        status: "success",
+        txHash: result.txHash
+      });
+      setFlowCredential({
+        ...result.credential,
+        status: "ISSUED",
+        registeredTxHash: result.txHash
+      });
+      setFlowMessageVariant("success");
+      setFlowMessage(
+        `${created.walletGenerated ? `Auto wallet ${student.walletAddress} was generated. ` : ""}Student created, credential issued, and hash registered on-chain. Tx ${shortHash(
+          result.txHash
+        )}`
+      );
+      setFlowForm((current) => ({
+        ...emptyStudentForm,
+        universityId: current.universityId
+      }));
+      await loadOnChainCredential(result.credential);
+      await loadData();
+      await wallet.refresh();
+    } catch (error) {
+      if (createdCredential) {
+        setCredentialTxState(createdCredential.id, {
+          status: "error",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Credential hash registration failed"
+        });
+      }
+      setFlowMessageVariant("destructive");
+      setFlowMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to finish the issuer flow"
+      );
+    } finally {
+      setFlowSaving(false);
     }
   }
 
@@ -502,6 +657,235 @@ export function IssuerDashboard() {
           </CardHeader>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Create student credential</CardTitle>
+          <CardDescription>
+            Create the student record, issue the credential, sign the issuer proof, and register the credential hash on-chain from one flow.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-5">
+          <form
+            onSubmit={createStudentAndIssueCredential}
+            className="grid gap-4 lg:grid-cols-2"
+          >
+            <Field label="Name">
+              <Input
+                value={flowForm.name}
+                onChange={(event) =>
+                  setFlowForm((current) => ({
+                    ...current,
+                    name: event.target.value
+                  }))
+                }
+                required
+              />
+            </Field>
+            <Field label="Student number">
+              <Input
+                value={flowForm.studentNo}
+                onChange={(event) =>
+                  setFlowForm((current) => ({
+                    ...current,
+                    studentNo: event.target.value
+                  }))
+                }
+                required
+              />
+            </Field>
+            <Field label="Department">
+              <Input
+                value={flowForm.department}
+                onChange={(event) =>
+                  setFlowForm((current) => ({
+                    ...current,
+                    department: event.target.value
+                  }))
+                }
+                required
+              />
+            </Field>
+            <Field label="University">
+              <Select
+                value={flowForm.universityId}
+                onValueChange={(value) =>
+                  setFlowForm((current) => ({
+                    ...current,
+                    universityId: value
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select university" />
+                </SelectTrigger>
+                <SelectContent>
+                  {issuers.map((issuer) => (
+                    <SelectItem key={issuer.id} value={issuer.id}>
+                      {issuer.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <div className="lg:col-span-2">
+              <Field label="Student wallet address">
+                <Input
+                  value={flowForm.walletAddress}
+                  onChange={(event) =>
+                    setFlowForm((current) => ({
+                      ...current,
+                      walletAddress: event.target.value
+                    }))
+                  }
+                  placeholder="Optional: leave empty to auto-generate"
+                />
+              </Field>
+            </div>
+            <div className="flex flex-col gap-3 lg:col-span-2 md:flex-row md:items-center md:justify-between">
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={flowForm.active}
+                  onChange={(event) =>
+                    setFlowForm((current) => ({
+                      ...current,
+                      active: event.target.checked
+                    }))
+                  }
+                />
+                Active student
+              </label>
+              <Button
+                type="submit"
+                disabled={flowSaving || !flowForm.universityId}
+                className="md:min-w-64"
+              >
+                {flowForm.active ? <ShieldCheck /> : <FileBadge />}
+                {flowSaving
+                  ? "Working..."
+                  : flowForm.active
+                    ? "Create & Register Credential"
+                    : "Create Student Only"}
+              </Button>
+            </div>
+          </form>
+
+          {blockchainActionsDisabled ? (
+            <Alert variant="warning">
+              <AlertTitle>Wallet needed for on-chain registration</AlertTitle>
+              <AlertDescription>
+                Connect MetaMask to Hardhat Local with the issuer wallet to complete the blockchain step.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {flowMessage ? (
+            <Alert variant={flowMessageVariant}>
+              <AlertTitle>
+                {flowMessageVariant === "success"
+                  ? "Issuer flow complete"
+                  : flowMessageVariant === "warning"
+                    ? "Issuer flow paused"
+                    : "Issuer flow failed"}
+              </AlertTitle>
+              <AlertDescription>{flowMessage}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          {flowPrivateKey ? (
+            <Alert variant="warning">
+              <AlertTitle>Demo wallet private key</AlertTitle>
+              <AlertDescription>
+                <div className="mt-2 flex flex-col gap-3">
+                  <p>
+                    Use this private key only for the local demo. Anyone with this key can control the generated student wallet.
+                  </p>
+                  <div className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-background/40 p-3 md:flex-row md:items-center">
+                    <code className="min-w-0 flex-1 break-all text-xs">
+                      {flowPrivateKey}
+                    </code>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void copyWalletAddress(flowPrivateKey)}
+                    >
+                      {copiedWallet === flowPrivateKey ? <Check /> : <Copy />}
+                      Copy private key
+                    </Button>
+                  </div>
+                </div>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {flowCredential ? (
+            <div className="grid gap-3 rounded-lg border border-border bg-muted p-4 md:grid-cols-4">
+              <div>
+                <p className="text-xs font-medium uppercase text-muted-foreground">
+                  Credential
+                </p>
+                <p className="mt-2 truncate font-mono text-xs">
+                  {flowCredential.credentialId}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase text-muted-foreground">
+                  Status
+                </p>
+                <div className="mt-2">
+                  <StatusBadge value={flowCredential.status} />
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase text-muted-foreground">
+                  Student wallet
+                </p>
+                <div className="mt-2 flex items-center gap-2">
+                  <p
+                    className="min-w-0 truncate font-mono text-xs"
+                    title={flowCredential.student?.walletAddress ?? "Unavailable"}
+                  >
+                    {shortHash(flowCredential.student?.walletAddress)}
+                  </p>
+                  {flowCredential.student?.walletAddress ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        void copyWalletAddress(
+                          flowCredential.student?.walletAddress ?? ""
+                        )
+                      }
+                    >
+                      {copiedWallet === flowCredential.student.walletAddress ? (
+                        <Check />
+                      ) : (
+                        <Copy />
+                      )}
+                      Copy
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs font-medium uppercase text-muted-foreground">
+                  Hash
+                </p>
+                <p
+                  className="mt-2 truncate font-mono text-xs"
+                  title={flowCredential.credentialHash ?? "Missing hash"}
+                >
+                  {shortHash(flowCredential.credentialHash)}
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
       {message ? (
         <Alert variant="destructive">
           <AlertTitle>Issuer action failed</AlertTitle>
@@ -621,8 +1005,7 @@ export function IssuerDashboard() {
                               walletAddress: event.target.value
                             }))
                           }
-                          placeholder="0x..."
-                          required
+                          placeholder="Optional: leave empty to auto-generate"
                         />
                       </Field>
                     </div>
@@ -663,6 +1046,12 @@ export function IssuerDashboard() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              <Alert variant="warning" className="mb-4">
+                <AlertTitle>Demo-only wallet keys</AlertTitle>
+                <AlertDescription>
+                  Auto-generated student wallet private keys are stored here only for the local demo so they can be imported into MetaMask. Do not use this pattern in production.
+                </AlertDescription>
+              </Alert>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -670,6 +1059,8 @@ export function IssuerDashboard() {
                     <TableHead>Number</TableHead>
                     <TableHead>Department</TableHead>
                     <TableHead>University</TableHead>
+                    <TableHead>Wallet</TableHead>
+                    <TableHead>Demo Private Key</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Credentials</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -678,11 +1069,11 @@ export function IssuerDashboard() {
                 <TableBody>
                   {loading ? (
                     <TableRow>
-                      <TableCell colSpan={7}>Loading students...</TableCell>
+                      <TableCell colSpan={9}>Loading students...</TableCell>
                     </TableRow>
                   ) : students.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7}>No students available.</TableCell>
+                      <TableCell colSpan={9}>No students available.</TableCell>
                     </TableRow>
                   ) : (
                     students.map((student) => (
@@ -691,6 +1082,60 @@ export function IssuerDashboard() {
                         <TableCell>{student.studentNo}</TableCell>
                         <TableCell>{student.department}</TableCell>
                         <TableCell>{student.university?.name ?? "Unknown"}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="max-w-36 truncate font-mono text-xs"
+                              title={student.walletAddress}
+                            >
+                              {shortHash(student.walletAddress)}
+                            </span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() =>
+                                void copyWalletAddress(student.walletAddress)
+                              }
+                            >
+                              {copiedWallet === student.walletAddress ? (
+                                <Check />
+                              ) : (
+                                <Copy />
+                              )}
+                              Copy
+                            </Button>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {student.walletPrivateKey ? (
+                            <div className="flex items-center gap-2">
+                              <span
+                                className="max-w-40 truncate font-mono text-xs"
+                                title={student.walletPrivateKey}
+                              >
+                                {shortHash(student.walletPrivateKey)}
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() =>
+                                  void copyWalletAddress(student.walletPrivateKey ?? "")
+                                }
+                              >
+                                {copiedWallet === student.walletPrivateKey ? (
+                                  <Check />
+                                ) : (
+                                  <Copy />
+                                )}
+                                Copy
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">
+                              Not stored
+                            </span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <StatusBadge value={student.active ? "Active" : "Inactive"} />
                         </TableCell>

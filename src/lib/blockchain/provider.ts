@@ -15,6 +15,8 @@ export const LOCAL_HARDHAT_CHAIN_ID = Number(
 );
 
 type EthereumProvider = Eip1193Provider & {
+  isMetaMask?: boolean;
+  providers?: EthereumProvider[];
   on?: (event: string, listener: (...args: unknown[]) => void) => void;
   removeListener?: (
     event: string,
@@ -41,7 +43,13 @@ export function getOptionalEthereumProvider() {
     return undefined;
   }
 
-  return window.ethereum;
+  const ethereum = window.ethereum;
+
+  if (!ethereum) {
+    return undefined;
+  }
+
+  return ethereum.providers?.find((provider) => provider.isMetaMask) ?? ethereum;
 }
 
 export function getEthereumProvider() {

@@ -207,13 +207,14 @@ Credential JSON is stored as a string for SQLite compatibility and returned as p
   - revoke credential hashes on-chain with the original issuer wallet
   - mark the local credential status as `REVOKED` with revocation metadata after successful on-chain revocation
 - Student wallet
-  - select a student
-  - view credentials for that student
+  - view the signed-in student's profile and credential wallet dashboard
+  - view credential cards, statuses, and minimal credential JSON
   - copy minimal credential JSON
-  - paste verifier challenge JSON
-  - connect MetaMask with the student wallet
-  - sign a deterministic presentation message
-  - copy presentation proof JSON
+  - open verifier request redirects at `/wallet/present?requestId=...`
+  - review shared and not-shared fields before approval
+  - select an eligible issued, unexpired credential
+  - approve with MetaMask and submit the presentation automatically
+  - keep manual challenge/proof JSON tools in Advanced Debug Tools only
 - Verifier dashboard
   - connect and sign in with the verifier MetaMask wallet
   - view recent verification requests, statuses, and result details
@@ -241,15 +242,18 @@ The verifier compares the presented credential payload hash against the stored d
 
 ## Holder Presentation Proofs
 
-The verifier no longer accepts a valid credential JSON by itself. The verifier first creates a short-lived challenge containing:
+The verifier no longer accepts a valid credential JSON by itself. The verifier first creates a short-lived API request containing:
 
 - `requestId`
 - `nonce`
 - `verifierName`
-- `createdAt`
+- `requestedCredentialType`
 - `expiresAt`
+- `walletRedirectUrl`
 
-The student opens the wallet page, pastes that challenge, and signs a deterministic human-readable message with MetaMask:
+The student opens `walletRedirectUrl`, reviews the verifier name, requested credential type, expiration, request status, connected wallet, and the shared/not-shared field summary. Normal approval does not require copying or pasting challenge JSON.
+
+After the student selects an eligible credential and clicks **Approve with Wallet**, the wallet signs the existing deterministic human-readable message with MetaMask:
 
 ```text
 Student Verification Presentation
@@ -262,7 +266,7 @@ Request ID: ...
 Nonce: ...
 ```
 
-The wallet returns presentation proof JSON containing the credential id, credential hash, student wallet address, request id, nonce, verifier name, exact signed message, and signature.
+The wallet builds presentation proof JSON containing the credential id, credential hash, student wallet address, request id, nonce, verifier name, exact signed message, and signature, then automatically posts it to `POST /api/verifier/requests/:requestId/presentation`.
 
 The verifier checks that the proof matches the credential, the request exists, the nonce matches, the request is not expired, the request has not already been used, the student wallet matches the credential subject DID, the signature recovers to that wallet, and the signed message reconstructs exactly. The backend also verifies the issuer proof embedded in the credential JSON.
 
@@ -280,7 +284,7 @@ The primary verifier flow is request based:
 6. The backend verifies local off-chain credential state, on-chain registry state, issuer proof, and holder presentation proof checks.
 7. The verifier checks the dashboard detail page or compact result API for `APPROVED`, `REJECTED`, `PENDING`, or computed `EXPIRED`.
 
-Manual challenge JSON remains visible and copyable in the wallet approval debug section for transparency. The old copy/paste verifier playground is available at `/verifier/debug` only for development/testing.
+Manual challenge JSON and manual proof JSON remain visible in wallet Advanced/Debug sections for transparency and troubleshooting. The old copy/paste verifier playground is available at `/verifier/debug` only for development/testing.
 
 ### Verifier API Endpoints
 

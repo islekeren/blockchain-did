@@ -49,10 +49,16 @@ type PresentationResult = {
   onChainChecks: VerificationCheck[];
   presentationChecks: VerificationCheck[];
   error?: string;
+  credentialId?: string | null;
+  credentialHash?: string | null;
 };
 
 function formatDate(value: string | null) {
   return value ? new Date(value).toLocaleString() : "Not set";
+}
+
+function isCredentialExpired(credential: CredentialRecord, now = new Date()) {
+  return credential.status === "EXPIRED" || new Date(credential.expiresAt) <= now;
 }
 
 function walletFromCredentialSubject(credential: CredentialRecord) {
@@ -103,6 +109,10 @@ export function WalletPresentationApproval({
   const [copied, setCopied] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
   const [result, setResult] = useState<PresentationResult | null>(null);
+  const [presentationProof, setPresentationProof] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,17 +138,18 @@ export function WalletPresentationApproval({
     setRequest(requestData.request);
     setCredentials(credentialsData.credentials ?? []);
     setSelectedCredentialId((current) => {
-      if (current) {
+      const eligible = (credentialsData.credentials ?? []).filter(
+        (credential) =>
+          credential.status === "ISSUED" &&
+          credential.type === requestData.request?.requestedCredentialType &&
+          !isCredentialExpired(credential)
+      );
+
+      if (current && eligible.some((credential) => credential.credentialId === current)) {
         return current;
       }
 
-      const eligible = (credentialsData.credentials ?? []).find(
-        (credential) =>
-          credential.status === "ISSUED" &&
-          credential.type === requestData.request?.requestedCredentialType
-      );
-
-      return eligible?.credentialId ?? "";
+      return eligible[0]?.credentialId ?? "";
     });
     setLoading(false);
   }, [requestId]);
@@ -155,7 +166,8 @@ export function WalletPresentationApproval({
     return credentials.filter(
       (credential) =>
         credential.status === "ISSUED" &&
-        credential.type === request.requestedCredentialType
+        credential.type === request.requestedCredentialType &&
+        !isCredentialExpired(credential)
     );
   }, [credentials, request]);
 
@@ -173,6 +185,19 @@ export function WalletPresentationApproval({
   const wrongWallet =
     Boolean(wallet.address && selectedWalletAddress) &&
     wallet.address !== selectedWalletAddress;
+  const requestLocked =
+    request?.status !== "PENDING" || Boolean(request?.used);
+  const displayResult: PresentationResult | null =
+    result ??
+    (request && (request.status === "APPROVED" || request.status === "REJECTED")
+      ? {
+          result: request.status,
+          offChainChecks: request.checkResults.offChain,
+          onChainChecks: request.checkResults.onChain,
+          presentationChecks: request.checkResults.holderProof,
+          credentialId: request.credentialId
+        }
+      : null);
   const challenge = request
     ? {
         requestId: request.requestId,
@@ -208,6 +233,7 @@ export function WalletPresentationApproval({
     setApproving(true);
     setMessage(null);
     setResult(null);
+    setPresentationProof(null);
 
     try {
       const signed = await signPresentation({
@@ -228,6 +254,7 @@ export function WalletPresentationApproval({
         message: signed.message,
         signature: signed.signature
       };
+      setPresentationProof(presentationProof);
       const response = await fetch(
         `/api/verifier/requests/${request.requestId}/presentation`,
         {
@@ -311,6 +338,14 @@ export function WalletPresentationApproval({
           </div>
           <div className="rounded-lg border border-border bg-muted p-4">
             <p className="text-xs font-medium uppercase text-muted-foreground">
+              Request status
+            </p>
+            <div className="mt-2">
+              <StatusBadge value={request.status} />
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-muted p-4">
+            <p className="text-xs font-medium uppercase text-muted-foreground">
               Expires
             </p>
             <p className="mt-2 text-sm">{formatDate(request.expiresAt)}</p>
@@ -326,6 +361,21 @@ export function WalletPresentationApproval({
         </CardContent>
       </Card>
 
+      {requestLocked ? (
+        <Alert variant={request.status === "EXPIRED" ? "warning" : "default"}>
+          <AlertTitle>
+            {request.status === "EXPIRED"
+              ? "Request expired"
+              : "Request already finalized"}
+          </AlertTitle>
+          <AlertDescription>
+            {request.status === "EXPIRED"
+              ? "This verification request is expired and cannot be approved."
+              : `This verification request is ${request.status.toLowerCase()} and cannot receive another presentation.`}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {message ? (
         <Alert variant="destructive">
           <AlertTitle>Approval failed</AlertTitle>
@@ -335,7 +385,7 @@ export function WalletPresentationApproval({
 
       <Card>
         <CardHeader>
-          <CardTitle>Shared student status</CardTitle>
+          <CardTitle>Shared information</CardTitle>
           <CardDescription>
             The verifier receives eligibility facts from the selected credential.
           </CardDescription>
@@ -346,7 +396,7 @@ export function WalletPresentationApproval({
             <Select
               value={selectedCredentialId}
               onValueChange={setSelectedCredentialId}
-              disabled={request.status !== "PENDING"}
+              disabled={requestLocked}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Select eligible credential" />
@@ -367,7 +417,8 @@ export function WalletPresentationApproval({
               <Alert variant="warning">
                 <AlertTitle>No eligible credential</AlertTitle>
                 <AlertDescription>
-                  This wallet does not have an issued credential matching the request.
+                  This student wallet does not have an issued, unexpired{" "}
+                  {request.requestedCredentialType} credential for this request.
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -375,7 +426,13 @@ export function WalletPresentationApproval({
               <Alert variant="warning">
                 <AlertTitle>Wallet mismatch</AlertTitle>
                 <AlertDescription>
-                  Connected wallet {wallet.address} does not match the selected credential subject wallet.
+                  Expected wallet{" "}
+                  <span className="break-all font-mono">{selectedWalletAddress}</span>
+                  ; current wallet{" "}
+                  <span className="break-all font-mono">
+                    {wallet.address ?? "not connected"}
+                  </span>
+                  .
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -383,10 +440,12 @@ export function WalletPresentationApproval({
               onClick={() => void approveWithWallet()}
               disabled={
                 approving ||
-                request.status !== "PENDING" ||
+                requestLocked ||
                 !selectedCredential ||
                 !wallet.hasMetaMask ||
-                !wallet.isLocalHardhat
+                !wallet.address ||
+                !wallet.isLocalHardhat ||
+                wrongWallet
               }
             >
               <Signature />
@@ -423,23 +482,102 @@ export function WalletPresentationApproval({
                 <p className="mt-2 text-sm">{value}</p>
               </div>
             ))}
+            <div className="rounded-lg border border-border bg-muted p-4">
+              <p className="text-xs font-medium uppercase text-muted-foreground">
+                Not shared
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {["Student number", "Department", "Identity document"].map((item) => (
+                  <StatusBadge key={item} value={`Hidden: ${item}`} />
+                ))}
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Challenge details</CardTitle>
+          <CardTitle>Credential eligibility</CardTitle>
           <CardDescription>
-            Debug copy access for the same request the wallet approval page uses automatically.
+            Only issued, unexpired credentials matching the requested type can be approved.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          {credentials.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No credentials are available for the signed-in student.
+            </p>
+          ) : (
+            credentials.map((credential) => {
+              const expired = isCredentialExpired(credential);
+              const status = expired ? "EXPIRED" : credential.status;
+              const typeMatches = credential.type === request.requestedCredentialType;
+              const eligible =
+                typeMatches && credential.status === "ISSUED" && !expired;
+
+              return (
+                <div
+                  key={credential.id}
+                  className="flex flex-col gap-3 rounded-lg border border-border bg-muted p-4 md:flex-row md:items-start md:justify-between"
+                >
+                  <div>
+                    <p className="break-all font-mono text-sm">
+                      {credential.credentialId}
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {credential.type} · expires {formatDate(credential.expiresAt)}
+                    </p>
+                    {!eligible ? (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {!typeMatches
+                          ? `Does not match requested type ${request.requestedCredentialType}.`
+                          : expired
+                            ? "Credential is expired."
+                            : `Current status is ${credential.status}.`}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <StatusBadge value={status} />
+                    {eligible ? <StatusBadge value="Eligible" /> : null}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Advanced Debug Details</CardTitle>
+          <CardDescription>
+            Challenge and proof JSON are available for inspection, not normal approval.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
           <details className="rounded-lg border border-border bg-muted p-4">
             <summary className="cursor-pointer text-sm font-medium">
               Show challenge JSON
             </summary>
             <div className="mt-4 flex flex-col gap-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                {[
+                  ["Request ID", request.requestId],
+                  ["Nonce", request.nonce ?? "Not set"],
+                  ["Verifier", request.verifierName],
+                  ["Requested type", request.requestedCredentialType],
+                  ["Expires", formatDate(request.expiresAt)]
+                ].map(([label, value]) => (
+                  <div key={label} className="rounded-md border border-border p-3">
+                    <p className="text-xs font-medium uppercase text-muted-foreground">
+                      {label}
+                    </p>
+                    <p className="mt-2 break-all font-mono text-xs">{value}</p>
+                  </div>
+                ))}
+              </div>
               <div className="flex flex-wrap justify-end gap-2">
                 <Button
                   size="sm"
@@ -469,25 +607,72 @@ export function WalletPresentationApproval({
               />
             </div>
           </details>
+          {presentationProof ? (
+            <details className="rounded-lg border border-border bg-muted p-4">
+              <summary className="cursor-pointer text-sm font-medium">
+                Show presentation proof JSON
+              </summary>
+              <div className="mt-4 flex flex-col gap-3">
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      void copyValue(
+                        "presentation-proof",
+                        JSON.stringify(presentationProof, null, 2)
+                      )
+                    }
+                  >
+                    {copied === "presentation-proof" ? <Check /> : <Copy />}
+                    Copy proof JSON
+                  </Button>
+                </div>
+                <Textarea
+                  readOnly
+                  value={JSON.stringify(presentationProof, null, 2)}
+                  className="min-h-64 font-mono text-xs leading-5"
+                />
+              </div>
+            </details>
+          ) : null}
         </CardContent>
       </Card>
 
-      {result ? (
+      {displayResult ? (
         <Card>
           <CardHeader>
-            <CardTitle className="flex flex-wrap items-center gap-3">
-              Verification result
-              <StatusBadge value={result.result} />
-            </CardTitle>
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <CardTitle className="flex flex-wrap items-center gap-3">
+                Verification result
+                <StatusBadge value={displayResult.result} />
+              </CardTitle>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  void copyValue("result", JSON.stringify(displayResult, null, 2))
+                }
+              >
+                {copied === "result" ? <Check /> : <Copy />}
+                Copy result JSON
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-5">
-            <CheckSummary title="Off-chain checks" checks={result.offChainChecks} />
+            <CheckSummary
+              title="Off-chain checks"
+              checks={displayResult.offChainChecks}
+            />
             <Separator />
-            <CheckSummary title="On-chain checks" checks={result.onChainChecks} />
+            <CheckSummary
+              title="On-chain checks"
+              checks={displayResult.onChainChecks}
+            />
             <Separator />
             <CheckSummary
               title="Holder presentation checks"
-              checks={result.presentationChecks}
+              checks={displayResult.presentationChecks}
             />
             <Button asChild>
               <Link href={`/verifier/requests/${request.requestId}`}>

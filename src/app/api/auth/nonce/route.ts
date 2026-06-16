@@ -18,6 +18,39 @@ export async function POST(request: Request) {
     const issuedAt = new Date();
     const nonceExpiresAt = new Date(issuedAt.getTime() + NONCE_TTL_MS);
     const nonce = crypto.randomUUID();
+    const student = await prisma.student.findUnique({
+      where: { walletAddress }
+    });
+    const existingUser = await prisma.user.findUnique({
+      where: { walletAddress }
+    });
+
+    if (
+      student &&
+      existingUser?.role === "VERIFIER" &&
+      existingUser.verifierName === "External Verifier"
+    ) {
+      const user = await prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          role: "STUDENT",
+          verifierName: null,
+          studentId: student.id,
+          nonce,
+          nonceExpiresAt
+        }
+      });
+
+      return NextResponse.json({
+        user: serializeUser(user),
+        message: createWalletAuthMessage({
+          walletAddress,
+          nonce,
+          issuedAt
+        }),
+        expiresAt: nonceExpiresAt.toISOString()
+      });
+    }
 
     const user = await prisma.user.upsert({
       where: { walletAddress },
@@ -27,8 +60,9 @@ export async function POST(request: Request) {
       },
       create: {
         walletAddress,
-        role: "VERIFIER",
-        verifierName: "External Verifier",
+        role: student ? "STUDENT" : "VERIFIER",
+        studentId: student?.id ?? null,
+        verifierName: student ? null : "External Verifier",
         nonce,
         nonceExpiresAt
       }

@@ -38,6 +38,7 @@ export type StudentRecord = {
   department: string;
   universityId: string;
   walletAddress: string;
+  walletPrivateKey: string | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;

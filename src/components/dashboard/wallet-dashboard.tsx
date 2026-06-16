@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { getAddress } from "ethers";
 import { Check, Copy, Signature, WalletCards } from "lucide-react";
@@ -290,9 +291,9 @@ export function WalletDashboard() {
               </p>
             </div>
             <div className="rounded-lg border border-border bg-muted p-4">
-              <p className="text-xs text-muted-foreground">Proofs</p>
-              <p className="mt-2 text-3xl font-semibold">
-                {Object.values(proofStates).filter((state) => state.proofJson).length}
+              <p className="text-xs text-muted-foreground">Wallet</p>
+              <p className="mt-2 text-lg font-semibold">
+                {wallet.address ? "Connected" : "Not connected"}
               </p>
             </div>
           </CardContent>
@@ -303,7 +304,7 @@ export function WalletDashboard() {
         <Alert variant="success">
           <AlertTitle>Credential copied</AlertTitle>
           <AlertDescription>
-            The minimal credential JSON is ready to paste into the verifier.
+            The minimal credential JSON is copied for inspection or debugging.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -312,10 +313,22 @@ export function WalletDashboard() {
         <Alert variant="success">
           <AlertTitle>Presentation proof copied</AlertTitle>
           <AlertDescription>
-            The signed proof JSON is ready to paste into the verifier.
+            The signed proof JSON is copied for the debug verifier flow.
           </AlertDescription>
         </Alert>
       ) : null}
+
+      <Alert>
+        <AlertTitle>Verifier approvals use request links</AlertTitle>
+        <AlertDescription>
+          In the normal flow, open the verifier redirect URL at{" "}
+          <Link className="font-medium underline" href="/wallet/present">
+            /wallet/present?requestId=...
+          </Link>
+          , review the request, select an eligible credential, and approve with
+          MetaMask. Manual challenge and proof tools are debug-only.
+        </AlertDescription>
+      </Alert>
 
       <div className="grid gap-4">
         {loading ? (
@@ -364,86 +377,91 @@ export function WalletDashboard() {
                 <CardContent className="flex flex-col gap-5">
                   <JsonViewer value={credential.credentialJson} />
                   <Separator />
-                  <div className="grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-                    <div className="flex flex-col gap-3">
-                      <div>
-                        <h3 className="text-sm font-semibold">
-                          Create Presentation Proof
-                        </h3>
-                        <p className="mt-1 text-sm text-muted-foreground">
-                          Paste a verifier challenge, then sign a deterministic presentation message with the student wallet.
-                        </p>
-                      </div>
-                      {studentWalletAddress ? (
-                        <div className="rounded-md border border-border bg-muted p-3">
-                          <p className="text-xs font-medium uppercase text-muted-foreground">
-                            Credential subject wallet
-                          </p>
-                          <p className="break-all font-mono text-xs">
-                            {studentWalletAddress}
+                  <details className="rounded-lg border border-border bg-muted p-4">
+                    <summary className="cursor-pointer text-sm font-medium">
+                      Advanced Debug Tools
+                    </summary>
+                    <div className="mt-4 grid gap-4 lg:grid-cols-[0.9fr_1.1fr]">
+                      <div className="flex flex-col gap-3">
+                        <div>
+                          <h3 className="text-sm font-semibold">
+                            Manual presentation proof
+                          </h3>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            Paste a verifier challenge JSON only when debugging the legacy copy/paste flow.
                           </p>
                         </div>
-                      ) : null}
-                      {wrongWallet ? (
-                        <Alert variant="warning">
-                          <AlertTitle>Wallet mismatch</AlertTitle>
-                          <AlertDescription>
-                            Connected wallet {wallet.address} does not match the credential subject wallet. A signature from this wallet will be rejected.
-                          </AlertDescription>
-                        </Alert>
-                      ) : null}
-                      {proofState?.error ? (
-                        <Alert variant="destructive">
-                          <AlertTitle>Proof signing failed</AlertTitle>
-                          <AlertDescription>{proofState.error}</AlertDescription>
-                        </Alert>
-                      ) : null}
-                      <Textarea
-                        value={challengeInputs[credential.id] ?? ""}
-                        onChange={(event) =>
-                          setChallengeInputs((current) => ({
-                            ...current,
-                            [credential.id]: event.target.value
-                          }))
-                        }
-                        className="min-h-40 font-mono text-xs leading-5"
-                        placeholder='Paste {"requestId":"...","nonce":"..."} challenge JSON here'
-                      />
-                      <Button
-                        onClick={() => void createPresentationProof(credential)}
-                        disabled={
-                          proofState?.signing ||
-                          !wallet.hasMetaMask ||
-                          !wallet.isLocalHardhat
-                        }
-                      >
-                        <Signature />
-                        {proofState?.signing
-                          ? "Signing..."
-                          : "Create Presentation Proof"}
-                      </Button>
-                    </div>
-                    <div className="flex flex-col gap-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <h3 className="text-sm font-semibold">Presentation proof JSON</h3>
+                        {studentWalletAddress ? (
+                          <div className="rounded-md border border-border bg-background p-3">
+                            <p className="text-xs font-medium uppercase text-muted-foreground">
+                              Credential subject wallet
+                            </p>
+                            <p className="break-all font-mono text-xs">
+                              {studentWalletAddress}
+                            </p>
+                          </div>
+                        ) : null}
+                        {wrongWallet ? (
+                          <Alert variant="warning">
+                            <AlertTitle>Wallet mismatch</AlertTitle>
+                            <AlertDescription>
+                              Connected wallet {wallet.address} does not match the credential subject wallet. A signature from this wallet will be rejected.
+                            </AlertDescription>
+                          </Alert>
+                        ) : null}
+                        {proofState?.error ? (
+                          <Alert variant="destructive">
+                            <AlertTitle>Proof signing failed</AlertTitle>
+                            <AlertDescription>{proofState.error}</AlertDescription>
+                          </Alert>
+                        ) : null}
+                        <Textarea
+                          value={challengeInputs[credential.id] ?? ""}
+                          onChange={(event) =>
+                            setChallengeInputs((current) => ({
+                              ...current,
+                              [credential.id]: event.target.value
+                            }))
+                          }
+                          className="min-h-40 font-mono text-xs leading-5"
+                          placeholder='Paste {"requestId":"...","nonce":"..."} challenge JSON here'
+                        />
                         <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void copyProof(credential)}
-                          disabled={!proofState?.proofJson}
+                          onClick={() => void createPresentationProof(credential)}
+                          disabled={
+                            proofState?.signing ||
+                            !wallet.hasMetaMask ||
+                            !wallet.isLocalHardhat
+                          }
                         >
-                          {copiedProofId === credential.id ? <Check /> : <Copy />}
-                          Copy Proof
+                          <Signature />
+                          {proofState?.signing
+                            ? "Signing..."
+                            : "Create Presentation Proof"}
                         </Button>
                       </div>
-                      <Textarea
-                        readOnly
-                        value={proofState?.proofJson ?? ""}
-                        className="min-h-64 font-mono text-xs leading-5"
-                        placeholder="Signed presentation proof will appear here"
-                      />
+                      <div className="flex flex-col gap-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="text-sm font-semibold">Presentation proof JSON</h3>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void copyProof(credential)}
+                            disabled={!proofState?.proofJson}
+                          >
+                            {copiedProofId === credential.id ? <Check /> : <Copy />}
+                            Copy Proof
+                          </Button>
+                        </div>
+                        <Textarea
+                          readOnly
+                          value={proofState?.proofJson ?? ""}
+                          className="min-h-64 font-mono text-xs leading-5"
+                          placeholder="Signed presentation proof will appear here"
+                        />
+                      </div>
                     </div>
-                  </div>
+                  </details>
                 </CardContent>
               </Card>
             );

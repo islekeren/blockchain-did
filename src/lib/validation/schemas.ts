@@ -29,7 +29,10 @@ export const createStudentSchema = z.object({
   studentNo: z.string().trim().min(2),
   department: z.string().trim().min(2),
   universityId: z.string().trim().min(1),
-  walletAddress: walletAddressSchema,
+  walletAddress: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
+    walletAddressSchema.optional()
+  ),
   active: z.boolean().optional()
 });
 

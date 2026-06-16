@@ -28,6 +28,7 @@ model Student {
   universityId  String
   university    Issuer       @relation(fields: [universityId], references: [id], onDelete: Restrict)
   walletAddress String       @unique
+  walletPrivateKey String?
   active        Boolean      @default(true)
   credentials   Credential[]
   users         User[]

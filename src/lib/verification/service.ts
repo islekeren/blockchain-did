@@ -220,6 +220,11 @@ export async function runCredentialVerification(input: RunVerificationInput) {
           credentialHash: presentedCredentialHash
         })
       : null;
+  const requestedCredentialType =
+    typeof verificationRequest?.requestedCredentialType === "string" &&
+    verificationRequest.requestedCredentialType.trim()
+      ? verificationRequest.requestedCredentialType
+      : null;
 
   const offChainChecks: VerificationCheck[] = [
     {
@@ -250,6 +255,17 @@ export async function runCredentialVerification(input: RunVerificationInput) {
       detail: credential
         ? `Current status is ${credential.status}`
         : "Status cannot be checked without a database credential"
+    },
+    {
+      label: "Credential type matches request",
+      passed:
+        !requestedCredentialType ||
+        (Boolean(credential) && credential?.type === requestedCredentialType),
+      detail: requestedCredentialType
+        ? credential
+          ? `Request expects ${requestedCredentialType}; credential type is ${credential.type}`
+          : "Credential type cannot be checked without a database credential"
+        : "No verifier request type was specified"
     },
     {
       label: "Student is active",
