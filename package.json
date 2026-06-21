@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "hardhat test",
+    "test:gas": "hardhat test test/GasEfficiency.test.ts",
     "format": "prettier --write .",
     "hardhat:compile": "hardhat compile",
     "hardhat:test": "hardhat test",
